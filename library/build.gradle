@@ -60,17 +60,12 @@ afterEvaluate {
 
 dependencies {
 	implementation libs.jsoup
-	implementation libs.tsuki
 	coreLibraryDesugaring libs.desugar.jdk.libs
 	implementation libs.kotlin.stdlib
 	implementation libs.kotlinx.coroutines.android
 	implementation libs.androidx.core
-	implementation libs.androidx.appcompat
-	implementation libs.androidx.webkit
 	implementation libs.androidx.preference
 	implementation libs.okhttp
-	implementation libs.okhttp.brotli
-	implementation libs.okhttp.tls
 	implementation libs.okhttp.dnsoverhttps
 	implementation libs.okio
 	implementation libs.rxjava
@@ -78,7 +73,5 @@ dependencies {
 	implementation libs.injekt.core
 	implementation libs.kotlinx.serialization.json
 	implementation libs.kotlinx.serialization.json.okio
-	implementation libs.xmlutil.core
-	implementation libs.xmlutil.serialization
 	implementation libs.unifile
 }
