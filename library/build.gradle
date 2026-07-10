@@ -52,7 +52,7 @@ afterEvaluate {
 				from components.release
 				groupId = 'org.draken'
 				artifactId = 'tsukimix'
-				version = '1.0.0'
+				version = '1.0.1'
 			}
 		}
 		repositories {

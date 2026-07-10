@@ -24,7 +24,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Publish to GitHub Packages
-        run: ./gradlew :library:publish
+        run: chmod +x gradlew && ./gradlew :library:publish
         env:
           LIB_VERSION: ${{ github.ref_name }}
           GITHUB_ACTOR: ${{ github.actor }}
