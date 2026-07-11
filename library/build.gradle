@@ -31,7 +31,10 @@ android {
 				"-opt-in=kotlinx.coroutines.ExperimentalCoroutinesApi",
 				"-opt-in=kotlin.contracts.ExperimentalContracts",
 				"-opt-in=kotlinx.serialization.ExperimentalSerializationApi",
-				"-Xcontext-parameters"
+				"-Xcontext-parameters",
+				"-Xno-param-assertions",
+				"-Xno-call-assertions",
+				"-Xno-receiver-assertions"
 			)
 		}
 	}
