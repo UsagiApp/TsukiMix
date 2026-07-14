@@ -55,7 +55,7 @@ afterEvaluate {
 				from components.release
 				groupId = 'org.draken'
 				artifactId = 'tsukimix'
-				version = '1.0.1'
+				version = '1.0.2'
 			}
 		}
 		repositories {
@@ -72,19 +72,29 @@ afterEvaluate {
 }
 
 dependencies {
-	implementation libs.jsoup
-	coreLibraryDesugaring libs.desugar.jdk.libs
-	implementation libs.kotlin.stdlib
-	implementation libs.kotlinx.coroutines.android
-	implementation libs.androidx.core
-	implementation libs.androidx.preference
-	implementation libs.okhttp
-	implementation libs.okhttp.dnsoverhttps
-	implementation libs.okio
-	implementation libs.rxjava
-	implementation libs.quickJs
-	implementation libs.injekt.core
-	implementation libs.kotlinx.serialization.json
-	implementation libs.kotlinx.serialization.json.okio
-	implementation libs.unifile
+	implementation(libs.kotlin.stdlib)
+	implementation(libs.kotlinx.coroutines.android)
+
+	implementation(libs.androidx.core)
+	implementation(libs.androidx.preference)
+
+	implementation(libs.okhttp)
+	implementation(libs.okhttp.dnsoverhttps)
+	implementation(libs.okhttp.brotli)
+	implementation(libs.okio)
+
+	implementation(libs.kotlinx.serialization.json)
+	implementation(libs.kotlinx.serialization.json.okio)
+	implementation(libs.kotlinx.serialization.protobuf)
+	implementation(libs.xmlutil.core)
+	implementation(libs.xmlutil.serialization)
+	implementation(libs.jsoup)
+
+	implementation(libs.rxjava)
+	implementation(libs.injekt.core)
+
+	implementation(libs.unifile)
+	implementation(libs.tsuki)
+
+	coreLibraryDesugaring(libs.desugar.jdk.libs)
 }
