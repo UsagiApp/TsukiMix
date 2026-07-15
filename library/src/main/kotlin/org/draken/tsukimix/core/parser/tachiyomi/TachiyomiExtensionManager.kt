@@ -69,7 +69,7 @@ class TachiyomiExtensionManager(
 
 	fun getSourceByName(name: String): TachiyomiMangaSource? {
 		return sourcesByName[name]
-			?: name.removePrefix("TACHI_").substringBefore(':').toLongOrNull()?.let(sourcesById::get)
+			?: name.removePrefix("EXTERNAL_").substringBefore(':').toLongOrNull()?.let(sourcesById::get)
 	}
 
 	fun getSources(): List<TachiyomiMangaSource> = sourcesById.values.toList()

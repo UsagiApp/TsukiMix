@@ -12,7 +12,7 @@ data class TachiyomiMangaSource(
 	val hasLanguageSuffix: Boolean = false,
 ) : MangaSource {
 	override val name: String
-		get() = "TACHI_${catalogueSource.id}"
+		get() = "EXTERNAL_${catalogueSource.id}"
 
 	override val locale: String
 		get() = catalogueSource.lang
@@ -38,7 +38,7 @@ data class TachiyomiMangaSource(
 	override fun equals(other: Any?): Boolean {
 		if (this === other) return true
 		if (other !is MangaSource) return false
-		val raw = other.name.removePrefix("TACHI_").substringBefore(':')
+		val raw = other.name.removePrefix("EXTERNAL_").substringBefore(':')
 		return raw.toLongOrNull() == sourceId
 	}
 
