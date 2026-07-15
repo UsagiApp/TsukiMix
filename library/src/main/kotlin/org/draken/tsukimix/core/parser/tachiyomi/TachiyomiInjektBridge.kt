@@ -23,6 +23,7 @@ import okhttp3.OkHttpClient
 import okhttp3.brotli.BrotliInterceptor
 import org.draken.tsukimix.core.parser.tachiyomi.preference.AndroidPreferenceStore
 import org.draken.tsukimix.core.parser.tachiyomi.preference.PreferenceStore
+import tsuki.network.UserAgents
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.InjektModule
 import uy.kohesive.injekt.api.InjektRegistrar
@@ -30,8 +31,7 @@ import uy.kohesive.injekt.api.addSingleton
 import uy.kohesive.injekt.api.addSingletonFactory
 import java.util.concurrent.TimeUnit
 
-private const val DEFAULT_USER_AGENT =
-	"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+private const val DEFAULT_USER_AGENT = UserAgents.CHROME_MOBILE
 
 class TachiyomiNetworkHelper(
 	private val context: Context,

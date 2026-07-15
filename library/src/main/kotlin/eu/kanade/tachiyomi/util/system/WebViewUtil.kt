@@ -15,12 +15,12 @@ object WebViewUtil {
 	private const val YOUTUBE_FOR_TV_PACKAGE = "com.google.android.youtube.tv"
 	private const val SYSTEM_SETTINGS_PACKAGE = "com.android.settings"
 
-	const val MINIMUM_WEBVIEW_VERSION = 118
+	const val MINIMUM_WEBVIEW_VERSION = 109
 
 	fun getInferredUserAgent(context: Context): String {
 		return WebView(context)
 			.getDefaultUserAgentString()
-			.replace("; Android .*?\\)".toRegex(), "; Android 10; K)")
+			.replace("; Android .*?\\)".toRegex(), "; Android 16; K)")
 			.replace("Version/.* Chrome/".toRegex(), "Chrome/")
 			.replace("wv", "")
 	}
