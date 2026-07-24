@@ -2,6 +2,10 @@
 -keep,allowoptimization class tachiyomi.** { public protected *; }
 -keep,allowoptimization class keiyoushi.** { public protected *; }
 
+-keep class kotlinx.serialization.** { *; }
+-keepclassmembers class kotlinx.serialization.** { *; }
+-keepclassmembers class **$$serializer { *; }
+
 -keep,allowoptimization class androidx.preference.PreferenceCategory { public protected *; }
 -keep,allowoptimization class androidx.preference.Preference { public protected *; }
 -keep,allowoptimization class androidx.preference.PreferenceScreen { public protected *; }

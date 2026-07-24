@@ -1,3 +1,5 @@
+@file:Suppress("unused", "QueryPermissionsNeeded")
+
 package org.draken.tsukimix.core.parser.tachiyomi
 
 import android.content.Context
@@ -88,9 +90,7 @@ class TachiyomiExtensionLoader(
 			return buildLoggedError(pkgInfo.packageName, "Extension APK is unsigned")
 		}
 		val classLoader = try {
-			val cacheDir = context.codeCacheDir ?: context.cacheDir ?: context.filesDir
-			val optimizedDir = java.io.File(cacheDir, pkgInfo.packageName).apply { mkdirs() }.absolutePath
-			ChildFirstPathClassLoader(appInfo.sourceDir, optimizedDir, appInfo.nativeLibraryDir, context.classLoader)
+			ChildFirstPathClassLoader(appInfo.sourceDir, appInfo.nativeLibraryDir, context.classLoader)
 		} catch (t: Throwable) {
 			return buildLoggedError(pkgInfo.packageName, "Failed to create class loader", t)
 		}

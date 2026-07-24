@@ -1,7 +1,10 @@
+@file:Suppress("unused")
+
 package org.draken.tsukimix.core.parser.tachiyomi
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import androidx.core.net.toUri
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.online.HttpSource
@@ -14,7 +17,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 object TachiyomiSourceSettings {
 
-	private const val KEY_DOMAIN = "domain"
+	const val KEY_DOMAIN = "domain"
+	const val KEY_OVERRIDE_BASE_URL = "overrideBaseUrl"
+	private const val KEY_DEFAULT_BASE_URL = "defaultBaseUrl"
 	private const val KEY_SLOWDOWN = "slowdown"
 	private val SOURCE_REGEX = "[^a-zA-Z0-9]".toRegex()
 
@@ -53,8 +58,30 @@ object TachiyomiSourceSettings {
 
 	fun refreshDomainOverride(context: Context, source: TachiyomiMangaSource) {
 		val httpSource = source.catalogueSource as? HttpSource ?: return
-		val baseHost = httpSource.baseUrl.toHttpUrlOrNull()?.host ?: return
-		TachiyomiDomainOverrides.set(baseHost, domain(context, source))
+		val prefs = preferences(context, source)
+		val domain = domain(prefs)
+		val defaultUrl = prefs.getString(KEY_DEFAULT_BASE_URL, null)?.toHttpUrlOrNull()
+		if (prefs.contains(KEY_OVERRIDE_BASE_URL) && defaultUrl != null) {
+			val targetUrl = domain?.let { defaultUrl.replaceAuthority(it) } ?: defaultUrl
+			val target = targetUrl.origin
+			if (prefs.getString(KEY_OVERRIDE_BASE_URL, null) != target) {
+				prefs.edit { putString(KEY_OVERRIDE_BASE_URL, target) }
+			}
+		}
+		val baseHost = defaultUrl?.host ?: httpSource.baseUrl.toHttpUrlOrNull()?.host ?: return
+		TachiyomiDomainOverrides.set(baseHost, domain)
+	}
+
+	fun mergeDomainPreference(context: Context, source: TachiyomiMangaSource) {
+		val prefs = preferences(context, source)
+		if (!prefs.contains(KEY_DOMAIN)) {
+			val current = prefs.getString(KEY_OVERRIDE_BASE_URL, null)?.toHttpUrlOrNull()
+			val default = prefs.getString(KEY_DEFAULT_BASE_URL, null)?.toHttpUrlOrNull()
+			if (current != null && current != default) {
+				prefs.edit { putString(KEY_DOMAIN, current.authority) }
+			}
+		}
+		refreshDomainOverride(context, source)
 	}
 
 	fun isSlowdownEnabled(context: Context, source: TachiyomiMangaSource): Boolean {
@@ -62,15 +89,27 @@ object TachiyomiSourceSettings {
 	}
 
 	private fun domain(context: Context, source: TachiyomiMangaSource): String? {
-		val httpSource = source.catalogueSource as? HttpSource ?: return null
-		val baseHost = httpSource.baseUrl.toHttpUrlOrNull()?.host ?: return null
-		val raw = preferences(context, source).getString(KEY_DOMAIN, null)
+		return domain(preferences(context, source))
+	}
+
+	private fun domain(prefs: SharedPreferences): String? {
+		return prefs.getString(KEY_DOMAIN, null)
 			?.trim()
 			?.removePrefix("https://")
 			?.removePrefix("http://")
 			?.substringBefore('/')
 			?.takeIf { isValidDomain(it) }
-		return raw?.takeUnless { it == baseHost }
+	}
+
+	private val HttpUrl.origin: String
+		get() = newBuilder().encodedPath("/").query(null).fragment(null).build().toString().removeSuffix("/")
+
+	private val HttpUrl.authority: String
+		get() = origin.substringAfter("://")
+
+	private fun HttpUrl.replaceAuthority(authority: String): HttpUrl? {
+		val replacement = "$scheme://$authority".toHttpUrlOrNull() ?: return null
+		return newBuilder().host(replacement.host).port(replacement.port).build()
 	}
 }
 
@@ -80,7 +119,9 @@ class TachiyomiDomainInterceptor : Interceptor {
 		val request = chain.request()
 		val domain = TachiyomiDomainOverrides.get(request.url.host)
 			?: return chain.proceed(request)
-		val newUrl = request.url.newBuilder().host(domain).build()
+		val replacement = "${request.url.scheme}://$domain".toHttpUrlOrNull()
+			?: return chain.proceed(request)
+		val newUrl = request.url.newBuilder().host(replacement.host).port(replacement.port).build()
 		return chain.proceed(request.newBuilder().url(newUrl).build())
 	}
 }
