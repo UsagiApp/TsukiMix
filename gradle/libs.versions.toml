@@ -30,6 +30,7 @@ kotlinx-serialization-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-seria
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okhttp-brotli = { module = "com.squareup.okhttp3:okhttp-brotli", version.ref = "okhttp" }
 okhttp-dnsoverhttps = { module = "com.squareup.okhttp3:okhttp-dnsoverhttps", version.ref = "okhttp" }
+okhttp-zstd = { module = "com.squareup.okhttp3:okhttp-zstd", version.ref = "okhttp" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 rxjava = { module = "io.reactivex:rxjava", version.ref = "rxjava" }
 tsuki = { module = "com.github.UsagiApp:Tsuki", version.ref = "tsuki" }
