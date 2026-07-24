@@ -1,15 +1,17 @@
+@file:Suppress("unused")
+
 package org.draken.tsukimix.core.parser.tachiyomi
 
 import android.content.Context
 import eu.kanade.tachiyomi.source.CatalogueSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiLoadResult
 import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiMangaSource
+import java.lang.ref.WeakReference
 
 class TachiyomiExtensionManager(
 	private val context: Context,
@@ -18,6 +20,7 @@ class TachiyomiExtensionManager(
 	private val refreshMutex = Mutex()
 	private val sourcesById = HashMap<Long, TachiyomiMangaSource>()
 	private val sourcesByName = HashMap<String, TachiyomiMangaSource>()
+	private val resolver = TachiyomiLanguageResolver(context)
 
 	private val _installedExtensions = MutableStateFlow<List<TachiyomiLoadResult.Success>>(emptyList())
 	private val _failedExtensions = MutableStateFlow<List<TachiyomiLoadResult.Error>>(emptyList())
@@ -32,11 +35,11 @@ class TachiyomiExtensionManager(
 	val sources: StateFlow<List<TachiyomiMangaSource>> = _sources
 
 	init {
-		activeInstance = this
+		activeInstance = WeakReference(this)
 	}
 
 	fun initialize() {
-		activeInstance = this
+		activeInstance = WeakReference(this)
 	}
 
 	suspend fun loadExtensions() {
@@ -61,7 +64,7 @@ class TachiyomiExtensionManager(
 			loadExtensions()
 		}
 		if (_isLoading.value) {
-			_isLoading.filter { !it }.first()
+			_isLoading.first { !it }
 		}
 	}
 
@@ -73,6 +76,24 @@ class TachiyomiExtensionManager(
 	}
 
 	fun getSources(): List<TachiyomiMangaSource> = sourcesById.values.toList()
+
+	fun getActiveSources(): List<TachiyomiMangaSource> = resolver.selectActive(_sources.value)
+
+	fun getLanguage(source: TachiyomiMangaSource): List<TachiyomiMangaSource> {
+		return resolver.getVariants(source, _sources.value)
+	}
+
+	fun getActiveLanguage(source: TachiyomiMangaSource): String? {
+		return resolver.getActiveLanguage(source, _sources.value)
+	}
+
+	fun setActiveLanguage(source: TachiyomiMangaSource, language: String) {
+		resolver.setActiveLanguage(source, language)
+	}
+
+	fun resolve(source: TachiyomiMangaSource): TachiyomiMangaSource {
+		return resolver.resolve(source, _sources.value)
+	}
 
 	fun getSourcesByLanguage(): Map<String, List<CatalogueSource>> {
 		return _installedExtensions.value
@@ -103,8 +124,8 @@ class TachiyomiExtensionManager(
 
 	companion object {
 		@Volatile
-		private var activeInstance: TachiyomiExtensionManager? = null
+		private var activeInstance = WeakReference<TachiyomiExtensionManager>(null)
 
-		fun getByName(name: String): TachiyomiMangaSource? = activeInstance?.getSourceByName(name)
+		fun getByName(name: String): TachiyomiMangaSource? = activeInstance.get()?.getSourceByName(name)
 	}
 }
