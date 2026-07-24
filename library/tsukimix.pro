@@ -7,7 +7,6 @@
 -keepclassmembers class **$$serializer { *; }
 
 -keep class okhttp3.zstd.** { *; }
--keep class com.squareup.zstd.** { *; }
 
 -keep,allowoptimization class androidx.preference.PreferenceCategory { public protected *; }
 -keep,allowoptimization class androidx.preference.Preference { public protected *; }

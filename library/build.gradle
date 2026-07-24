@@ -82,7 +82,6 @@ dependencies {
 	implementation(libs.okhttp)
 	implementation(libs.okhttp.dnsoverhttps)
 	implementation(libs.okhttp.brotli)
-	implementation(libs.okhttp.zstd)
 	implementation(libs.okio)
 
 	implementation(libs.kotlinx.serialization.json)
