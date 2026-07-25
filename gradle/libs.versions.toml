@@ -11,7 +11,9 @@ okhttp = "5.3.2"
 okio = "3.17.0"
 preference = "1.2.1"
 rxjava = "1.3.8"
-serialization = "1.9.0"
+# 1.8+ breaks GeneratedSerializer ABI for compile-only Tachiyomi extensions after R8
+#noinspection NewerVersionAvailable
+serialization = "1.7.3"
 tsuki = "1.0.2"
 unifile = "e0def6b3dc"
 xmlutil = "0.91.3"
