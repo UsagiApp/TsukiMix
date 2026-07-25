@@ -3,10 +3,17 @@
 -keep,allowoptimization class keiyoushi.** { public protected *; }
 
 -keep class kotlinx.serialization.** { *; }
+-keep interface kotlinx.serialization.** { *; }
 -keepclassmembers class kotlinx.serialization.** { *; }
+-keep class * implements kotlinx.serialization.internal.GeneratedSerializer { *; }
+-keep interface kotlinx.serialization.internal.GeneratedSerializer { *; }
+-keepclassmembers class * implements kotlinx.serialization.internal.GeneratedSerializer { *; }
+-keep class **$$serializer { *; }
 -keepclassmembers class **$$serializer { *; }
+-dontwarn kotlinx.serialization.**
 
 -keep class okhttp3.zstd.** { *; }
+-keep class com.squareup.zstd.** { *; }
 
 -keep,allowoptimization class androidx.preference.PreferenceCategory { public protected *; }
 -keep,allowoptimization class androidx.preference.Preference { public protected *; }
