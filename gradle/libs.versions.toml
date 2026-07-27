@@ -12,7 +12,7 @@ okio = "3.17.0"
 preference = "1.2.1"
 rxjava = "1.3.8"
 serialization = "1.11.0"
-tsuki = "1.0.3"
+tsuki = "1.0.5"
 unifile = "e0def6b3dc"
 #noinspection NewerVersionAvailable
 xmlutil = "0.90.3"
