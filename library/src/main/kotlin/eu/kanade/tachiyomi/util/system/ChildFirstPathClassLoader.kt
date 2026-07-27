@@ -1,6 +1,6 @@
 package eu.kanade.tachiyomi.util.system
 
-import dalvik.system.DexClassLoader
+import dalvik.system.PathClassLoader
 import java.io.IOException
 import java.io.InputStream
 import java.net.URL
@@ -8,10 +8,9 @@ import java.util.Enumeration
 
 class ChildFirstPathClassLoader(
 	dexPath: String,
-	optimizedDirectory: String?,
 	librarySearchPath: String?,
 	parent: ClassLoader,
-) : DexClassLoader(dexPath, optimizedDirectory, librarySearchPath, parent) {
+) : PathClassLoader(dexPath, librarySearchPath, parent) {
 
 	private val systemClassLoader: ClassLoader? = getSystemClassLoader()
 

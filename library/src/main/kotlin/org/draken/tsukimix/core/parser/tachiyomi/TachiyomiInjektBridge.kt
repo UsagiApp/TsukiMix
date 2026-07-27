@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package org.draken.tsukimix.core.parser.tachiyomi
 
 import android.app.Application
@@ -8,7 +10,6 @@ import eu.kanade.tachiyomi.network.AndroidCookieJar
 import eu.kanade.tachiyomi.network.JavaScriptEngine
 import eu.kanade.tachiyomi.network.NetworkHelper
 import eu.kanade.tachiyomi.network.interceptor.CloudflareInterceptor
-import eu.kanade.tachiyomi.network.interceptor.IgnoreGzipInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
 import kotlinx.serialization.SerialFormat
@@ -20,7 +21,6 @@ import nl.adaptivity.xmlutil.core.XmlVersion
 import nl.adaptivity.xmlutil.serialization.XML
 import okhttp3.CookieJar
 import okhttp3.OkHttpClient
-import okhttp3.brotli.BrotliInterceptor
 import org.draken.tsukimix.core.parser.tachiyomi.preference.AndroidPreferenceStore
 import org.draken.tsukimix.core.parser.tachiyomi.preference.PreferenceStore
 import tsuki.network.UserAgents
@@ -53,8 +53,6 @@ class TachiyomiNetworkHelper(
 		addInterceptor(UncaughtExceptionInterceptor())
 		addInterceptor(UserAgentInterceptor(::defaultUserAgentProvider))
 		addInterceptor(TachiyomiDomainInterceptor())
-		addNetworkInterceptor(IgnoreGzipInterceptor())
-		addNetworkInterceptor(BrotliInterceptor)
 		baseClient.interceptors
 			.filterNot { it.javaClass.simpleName in skipInterceptors }
 			.forEach(::addInterceptor)
@@ -84,6 +82,7 @@ class TachiyomiInjektBridge(
 	private val context: Context,
 	private val httpClient: OkHttpClient,
 	private val defaultUserAgentProvider: () -> String,
+	private val javaScriptEvaluator: suspend (String) -> String?,
 ) {
 	@Volatile
 	private var initialized = false
@@ -128,7 +127,7 @@ class TachiyomiInjektBridge(
 				addSingletonFactory<SerialFormat> { json }
 				addSingletonFactory<XML> { xml }
 				addSingletonFactory<ProtoBuf> { ProtoBuf }
-				addSingletonFactory<JavaScriptEngine> { JavaScriptEngine(context) }
+				addSingletonFactory<JavaScriptEngine> { JavaScriptEngine(javaScriptEvaluator) }
 			}
 		})
 		initialized = true

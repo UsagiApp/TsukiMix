@@ -7,6 +7,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import rx.Observable
+import tachiyomi.core.common.util.lang.awaitSingle
 
 /**
  * Binary-compatible source contract. Keep this aligned with Mihon's source-api: extension APKs
@@ -28,6 +29,14 @@ interface Source {
 		fetchChapters: Boolean,
 	): SMangaUpdate
 	suspend fun getPageList(chapter: SChapter): List<Page>
+
+	@Suppress("DEPRECATION")
+	@Deprecated("Use the combined suspend API instead", ReplaceWith("getMangaUpdate"))
+	suspend fun getMangaDetails(manga: SManga): SManga = fetchMangaDetails(manga).awaitSingle()
+
+	@Suppress("DEPRECATION")
+	@Deprecated("Use the combined suspend API instead", ReplaceWith("getMangaUpdate"))
+	suspend fun getChapterList(manga: SManga): List<SChapter> = fetchChapterList(manga).awaitSingle()
 
 	@Deprecated("Use the combined suspend API instead", ReplaceWith("getMangaUpdate"))
 	fun fetchMangaDetails(manga: SManga): Observable<SManga> = throw UnsupportedOperationException("Stub! Have no idea!")

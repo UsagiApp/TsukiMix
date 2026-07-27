@@ -1,4 +1,4 @@
-@file:Suppress("unused", "deprecation")
+@file:Suppress("UNCHECKED_CAST", "unused")
 
 package eu.kanade.tachiyomi.network
 
@@ -11,34 +11,35 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONTokener
 import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /**
  * Util for evaluating JavaScript in sources.
  *
  * @since extension-lib 1.4
  */
-class JavaScriptEngine(private val context: Context) {
+class JavaScriptEngine internal constructor(
+	private val evaluator: suspend (String) -> String?,
+) {
 
-	@SuppressLint("SetJavaScriptEnabled")
-    @Suppress("UNCHECKED_CAST")
-	suspend fun <T> evaluate(script: String): T = withContext(Dispatchers.Main) {
-		suspendCancellableCoroutine { continuation ->
-			val webView = WebView(context)
+	constructor(context: Context) : this({ script -> evaluate(context, script) })
+
+	suspend fun <T> evaluate(script: String): T {
+		val value = evaluator(script)?.let { JSONTokener(it).nextValue() }
+		return (if (value == JSONObject.NULL) null else value) as T
+	}
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+private suspend fun evaluate(context: Context, script: String): String? {
+	return withContext(Dispatchers.Main.immediate) {
+		val webView = WebView(context.applicationContext)
+		try {
 			webView.settings.javaScriptEnabled = true
-			webView.evaluateJavascript(script) { result ->
-				try {
-					if (result == null || result == "null") {
-						continuation.resume(null as T)
-					} else {
-						val token = JSONTokener(result).nextValue()
-						val decoded = if (token == JSONObject.NULL) null else token
-						continuation.resume(decoded as T)
-					}
-				} catch (e: Throwable) {
-					continuation.resumeWithException(e)
-				}
+			suspendCancellableCoroutine { continuation ->
+				webView.evaluateJavascript(script) { continuation.resume(it) }
 			}
+		} finally {
+			webView.destroy()
 		}
 	}
 }
