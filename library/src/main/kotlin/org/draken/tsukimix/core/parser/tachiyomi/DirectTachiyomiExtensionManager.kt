@@ -23,6 +23,7 @@ import okhttp3.Request
 import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiLoadResult
 import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiMangaSource
 import org.json.JSONArray
+import tsuki.model.ContentType
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -160,7 +161,7 @@ class DirectTachiyomiExtensionManager(
 							versionCode = loaded.versionCode,
 							versionName = loaded.versionName,
 							libVersion = loaded.libVersion,
-							contentRating = loaded.isNsfw.let { if (it) TachiyomiContentRating.NSFW else artifact.contentRating },
+							contentType = if (loaded.isNsfw) ContentType.HENTAI else artifact.contentType,
 							iconUrl = artifact.iconUrl,
 							sources = artifact.sources,
 						)
@@ -233,7 +234,7 @@ class DirectTachiyomiExtensionManager(
 							versionCode = result.versionCode,
 							versionName = result.versionName,
 							libVersion = result.libVersion,
-							contentRating = if (result.isNsfw) TachiyomiContentRating.NSFW else record.contentRating,
+							contentType = if (result.isNsfw) ContentType.HENTAI else record.contentType,
 							iconUrl = record.iconUrl,
 							sources = if (record.sources.isNotEmpty()) record.sources else record.toArtifact().sources,
 						)
@@ -289,9 +290,8 @@ class DirectTachiyomiExtensionManager(
 				metadata.getString(METADATA_SOURCE_CLASS)
 					?: metadata.getString(METADATA_SOURCE_FACTORY)
 					?: return TachiyomiLoadResult.Error(artifact.packageName, "Missing source class metadata")
-			val manifestRating = TachiyomiContentRating.fromManifest(metadata)
+							val effectiveContentType = contentTypeFromManifest(metadata) ?: artifact.contentType
 
-			val effectiveRating = if (manifestRating != TachiyomiContentRating.UNSPECIFIED) manifestRating else artifact.contentRating
 			val loader =
 				runCatching {
 					val optimizedDirectory =
@@ -329,7 +329,7 @@ class DirectTachiyomiExtensionManager(
 					versionName = versionName,
 					libVersion = libVersion,
 					lang = sources.mapNotNull { (it as? CatalogueSource)?.lang }.distinct().let { if (it.size == 1) it.first() else "all" },
-					isNsfw = effectiveRating.isNsfw,
+					isNsfw = effectiveContentType == ContentType.HENTAI,
 					sources = sources,
 				)
 			}.getOrElse { TachiyomiLoadResult.Error(artifact.packageName, "Failed to load extension: ${it.describeFailure()}", it) }
@@ -368,12 +368,11 @@ class DirectTachiyomiExtensionManager(
 			Bundle().apply {
 				putString(METADATA_SOURCE_CLASS, "$packageName.ExtensionGenerated")
 				artifact.extensionLib?.let { putDouble(METADATA_EXTENSION_LIB, it) }
-				when (artifact.contentRating) {
-					TachiyomiContentRating.SAFE -> putInt(METADATA_CONTENT_WARNING, 0)
-					TachiyomiContentRating.MIXED -> putInt(METADATA_CONTENT_WARNING, 1)
-					TachiyomiContentRating.NSFW -> putInt(METADATA_CONTENT_WARNING, 2)
-					TachiyomiContentRating.UNSPECIFIED -> Unit
-				}
+									putInt(
+						METADATA_CONTENT_WARNING,
+						if (artifact.contentType == ContentType.HENTAI) 2 else 0,
+					)
+
 			}
 
 		private fun download(
@@ -534,71 +533,46 @@ class DirectTachiyomiExtensionManager(
 		}
 	}
 
-enum class TachiyomiContentRating {
-	UNSPECIFIED,
-	SAFE,
-	MIXED,
-	NSFW,
-	;
-
-	val isNsfw: Boolean
-		get() = this == NSFW
-
-	companion object {
-		fun fromCatalog(
-			raw: String?,
-			extensionLib: Double?,
-		): TachiyomiContentRating {
-			val value = raw?.trim().orEmpty()
-			return when {
-				value.equals("CONTENT_WARNING_NSFW", true) || value.equals("NSFW", true) -> {
-					NSFW
-				}
-
-				value.equals("CONTENT_WARNING_MIXED", true) || value.equals("MIXED", true) -> {
-					MIXED
-				}
-
-				value.equals("CONTENT_WARNING_SAFE", true) || value.equals("SAFE", true) -> {
-					SAFE
-				}
-
-				value.equals("CONTENT_WARNING_UNSPECIFIED", true) || value.equals("UNSPECIFIED", true) -> {
-					UNSPECIFIED
-				}
-
-				else -> {
-					val number = value.toIntOrNull() ?: return UNSPECIFIED
-					if ((extensionLib ?: 1.6) >= 1.6) {
-						when (number) {
-							1 -> SAFE
-							2 -> MIXED
-							3 -> NSFW
-							else -> UNSPECIFIED
-						}
-					} else {
-						when (number) {
-							0 -> SAFE
-							1 -> MIXED
-							2 -> NSFW
-							else -> UNSPECIFIED
-						}
-					}
-				}
-			}
+private fun contentTypeFromCatalog(
+	raw: String?,
+	extensionLib: Double?,
+	fallback: ContentType = ContentType.MANGA,
+): ContentType {
+	val value = raw?.trim().orEmpty()
+	if (value.isBlank()) return fallback
+	return when {
+		value.equals("MANGA", true) ||
+			value.equals("CONTENT_WARNING_SAFE", true) ||
+			value.equals("SAFE", true) -> {
+			ContentType.MANGA
 		}
 
-		fun fromManifest(metadata: Bundle): TachiyomiContentRating {
-			val warning = runCatching { metadata.getInt("tachiyomix.contentWarning", Int.MIN_VALUE) }.getOrDefault(Int.MIN_VALUE)
-			val legacyNsfw = runCatching { metadata.getInt("tachiyomi.extension.nsfw", 0) }.getOrDefault(0)
-			return when {
-				warning == 0 -> SAFE
-				warning == 1 -> MIXED
-				warning == 2 -> NSFW
-				legacyNsfw == 1 -> NSFW
-				else -> UNSPECIFIED
+		value.equals("HENTAI", true) ||
+			value.equals("CONTENT_WARNING_MIXED", true) ||
+			value.equals("MIXED", true) ||
+			value.equals("CONTENT_WARNING_NSFW", true) ||
+			value.equals("NSFW", true) -> {
+			ContentType.HENTAI
+		}
+
+		else -> {
+			val number = value.toIntOrNull() ?: return fallback
+			if ((extensionLib ?: 1.6) >= 1.6) {
+				if (number == 1) ContentType.MANGA else ContentType.HENTAI
+			} else {
+				if (number == 0) ContentType.MANGA else ContentType.HENTAI
 			}
 		}
+	}
+}
+
+private fun contentTypeFromManifest(metadata: Bundle): ContentType? {
+	val warning = runCatching { metadata.getInt("tachiyomix.contentWarning", Int.MIN_VALUE) }.getOrDefault(Int.MIN_VALUE)
+	val legacyNsfw = runCatching { metadata.getInt("tachiyomi.extension.nsfw", 0) }.getOrDefault(0)
+	return when {
+		warning == 0 -> ContentType.MANGA
+		warning > 0 || legacyNsfw == 1 -> ContentType.HENTAI
+		else -> null
 	}
 }
 
@@ -607,7 +581,7 @@ data class TachiyomiCatalogSource(
 	val name: String,
 	val language: String,
 	val homeUrl: String?,
-	val contentRating: TachiyomiContentRating = TachiyomiContentRating.UNSPECIFIED,
+	val contentType: ContentType = ContentType.MANGA,
 )
 
 data class TachiyomiExtensionArtifact(
@@ -620,10 +594,10 @@ data class TachiyomiExtensionArtifact(
 	val extensionLib: Double?,
 	val versionCode: Long?,
 	val versionName: String?,
-	val contentRating: TachiyomiContentRating = TachiyomiContentRating.UNSPECIFIED,
+	val contentType: ContentType = ContentType.MANGA,
 	val sources: List<TachiyomiCatalogSource> = emptyList(),
 ) {
-	val isNsfw: Boolean get() = contentRating.isNsfw
+	val isNsfw: Boolean get() = contentType == ContentType.HENTAI
 }
 
 data class DirectTachiyomiInstalled(
@@ -636,12 +610,12 @@ data class DirectTachiyomiInstalled(
 	val versionCode: Long,
 	val versionName: String,
 	val libVersion: Double,
-	val contentRating: TachiyomiContentRating,
+	val contentType: ContentType,
 	val sources: List<TachiyomiCatalogSource> = emptyList(),
 ) {
-	val isNsfw: Boolean get() = contentRating.isNsfw
+	val isNsfw: Boolean get() = contentType == ContentType.HENTAI
 
-	fun toArtifact() = TachiyomiExtensionArtifact(repositoryUrl, name, packageName, jarUrl, apkUrl, iconUrl, libVersion, versionCode, versionName, contentRating, sources)
+	fun toArtifact() = TachiyomiExtensionArtifact(repositoryUrl, name, packageName, jarUrl, apkUrl, iconUrl, libVersion, versionCode, versionName, contentType, sources)
 
 	fun toJson() =
 		JSONObject().apply {
@@ -655,7 +629,7 @@ data class DirectTachiyomiInstalled(
 			put("versionCode", versionCode)
 			put("versionName", versionName)
 			put("libVersion", libVersion)
-			put("contentRating", contentRating.name)
+			put("contentType", contentType.name)
 			put("isNsfw", isNsfw)
 			put(
 				"sources",
@@ -667,7 +641,7 @@ data class DirectTachiyomiInstalled(
 								put("name", source.name)
 								put("language", source.language)
 								put("homeUrl", source.homeUrl)
-								put("contentRating", source.contentRating.name)
+								put("contentType", source.contentType.name)
 							},
 						)
 					}
@@ -678,8 +652,16 @@ data class DirectTachiyomiInstalled(
 	companion object {
 		fun fromJson(obj: JSONObject) =
 			runCatching {
-				val libVersion = obj.optDouble("libVersion", 1.4)
-				DirectTachiyomiInstalled(
+									val libVersion = obj.optDouble("libVersion", 1.4)
+					val contentType =
+						contentTypeFromCatalog(
+							obj.optString("contentType").takeIf { it.isNotBlank() }
+								?: obj.optString("contentRating").takeIf { it.isNotBlank() }
+								?: if (obj.optBoolean("isNsfw")) "HENTAI" else "MANGA",
+							libVersion,
+						)
+					DirectTachiyomiInstalled(
+
 					packageName = obj.getString("packageName"),
 					name = obj.optString("name", obj.getString("packageName")),
 					repositoryUrl = obj.optString("repositoryUrl"),
@@ -689,13 +671,28 @@ data class DirectTachiyomiInstalled(
 					versionCode = obj.optLong("versionCode", 0L),
 					versionName = obj.optString("versionName", "0.0.0"),
 					libVersion = libVersion,
-					contentRating = TachiyomiContentRating.valueOf(obj.optString("contentRating").ifBlank { if (obj.optBoolean("isNsfw")) "NSFW" else "UNSPECIFIED" }),
+						contentType = contentType,
+
 					sources =
 						buildList {
 							val sourceArray = obj.optJSONArray("sources") ?: return@buildList
 							for (index in 0 until sourceArray.length()) {
 								val source = sourceArray.optJSONObject(index) ?: continue
-								add(TachiyomiCatalogSource(source.optLong("id"), source.optString("name"), source.optString("language", "all"), source.optString("homeUrl").takeIf { it.isNotBlank() }, TachiyomiContentRating.fromCatalog(source.optString("contentRating").takeIf { it.isNotBlank() }, libVersion)))
+																	add(
+										TachiyomiCatalogSource(
+											source.optLong("id"),
+											source.optString("name"),
+											source.optString("language", "all"),
+											source.optString("homeUrl").takeIf { it.isNotBlank() },
+											contentTypeFromCatalog(
+												source.optString("contentType").takeIf { it.isNotBlank() }
+													?: source.optString("contentRating").takeIf { it.isNotBlank() },
+												libVersion,
+												contentType,
+											),
+										),
+									)
+
 							}
 						},
 				)
@@ -881,7 +878,8 @@ class TachiyomiExtensionCatalogProvider(
 					artifact.extensionLib?.let { cachedArtifact.put("extensionLib", it) }
 					artifact.versionCode?.let { cachedArtifact.put("versionCode", it) }
 					artifact.versionName?.let { cachedArtifact.put("versionName", it) }
-					cachedArtifact.put("contentRating", artifact.contentRating.name)
+											cachedArtifact.put("contentType", artifact.contentType.name)
+
 					val cachedSources = JSONArray()
 					artifact.sources.forEach { source ->
 						val cachedSource = JSONObject()
@@ -889,7 +887,8 @@ class TachiyomiExtensionCatalogProvider(
 						cachedSource.put("name", source.name)
 						cachedSource.put("language", source.language)
 						source.homeUrl?.let { cachedSource.put("homeUrl", it) }
-						cachedSource.put("contentRating", source.contentRating.name)
+													cachedSource.put("contentType", source.contentType.name)
+
 						cachedSources.put(cachedSource)
 					}
 					cachedArtifact.put("sources", cachedSources)
@@ -922,7 +921,12 @@ class TachiyomiExtensionCatalogProvider(
 										name = source.optString("name", packageName),
 										language = source.optString("language", "all"),
 										homeUrl = source.optString("homeUrl").takeIf { it.isNotBlank() },
-										contentRating = TachiyomiContentRating.fromCatalog(source.optString("contentRating"), extensionLib),
+										contentType =
+											contentTypeFromCatalog(
+												source.optString("contentType").takeIf { it.isNotBlank() }
+													?: source.optString("contentRating").takeIf { it.isNotBlank() },
+												extensionLib,
+											),
 									),
 								)
 							}
@@ -938,7 +942,13 @@ class TachiyomiExtensionCatalogProvider(
 							extensionLib = extensionLib,
 							versionCode = artifact.optString("versionCode").toLongOrNull(),
 							versionName = artifact.optString("versionName").takeIf { it.isNotBlank() },
-							contentRating = TachiyomiContentRating.fromCatalog(artifact.optString("contentRating"), extensionLib),
+															contentType =
+									contentTypeFromCatalog(
+										artifact.optString("contentType").takeIf { it.isNotBlank() }
+											?: artifact.optString("contentRating").takeIf { it.isNotBlank() },
+										extensionLib,
+									),
+
 							sources = sources,
 						),
 					)
@@ -1005,12 +1015,14 @@ class TachiyomiExtensionCatalogProvider(
 						val packageName = obj.optString("packageName").takeIf { it.isNotBlank() } ?: continue
 						val resources = obj.optJSONObject("resources")
 						val extensionLib = obj.optString("extensionLib").toDoubleOrNull()
-						val catalogRating =
-							TachiyomiContentRating.fromCatalog(
-								obj.opt("contentRating")?.toString()?.takeIf { it.isNotBlank() }
-									?: obj.opt("contentWarning")?.toString()?.takeIf { it.isNotBlank() },
-								extensionLib,
-							)
+													val catalogContentType =
+								contentTypeFromCatalog(
+									obj.opt("contentType")?.toString()?.takeIf { it.isNotBlank() }
+										?: obj.opt("contentRating")?.toString()?.takeIf { it.isNotBlank() }
+										?: obj.opt("contentWarning")?.toString()?.takeIf { it.isNotBlank() },
+									extensionLib,
+								)
+
 						val sourceObjects = obj.optJSONArray("sources")
 						val catalogSources =
 							buildList {
@@ -1019,10 +1031,20 @@ class TachiyomiExtensionCatalogProvider(
 										val source = sourceObjects.optJSONObject(sourceIndex) ?: continue
 										val id = source.optString("id").toLongOrNull() ?: continue
 										val language = source.optString("language", "all").takeIf { it.isNotBlank() } ?: "all"
-										val sourceRating =
-											source.opt("contentRating")?.toString()?.takeIf { it.isNotBlank() }
-												?: source.opt("contentWarning")?.toString()?.takeIf { it.isNotBlank() }
-										add(TachiyomiCatalogSource(id, source.optString("name", packageName), language, source.optString("homeUrl").takeIf { it.isNotBlank() }, TachiyomiContentRating.fromCatalog(sourceRating, extensionLib)))
+																					val sourceContentType =
+												source.opt("contentType")?.toString()?.takeIf { it.isNotBlank() }
+													?: source.opt("contentRating")?.toString()?.takeIf { it.isNotBlank() }
+													?: source.opt("contentWarning")?.toString()?.takeIf { it.isNotBlank() }
+											add(
+												TachiyomiCatalogSource(
+													id,
+													source.optString("name", packageName),
+													language,
+													source.optString("homeUrl").takeIf { it.isNotBlank() },
+													contentTypeFromCatalog(sourceContentType, extensionLib),
+												),
+											)
+
 									}
 								}
 							}
@@ -1037,7 +1059,8 @@ class TachiyomiExtensionCatalogProvider(
 								extensionLib = extensionLib,
 								versionCode = obj.optString("versionCode").toLongOrNull(),
 								versionName = obj.optString("versionName").takeIf { it.isNotBlank() },
-								contentRating = if (obj.optBoolean("isNsfw")) TachiyomiContentRating.NSFW else catalogRating,
+																	contentType = if (obj.optBoolean("isNsfw")) ContentType.HENTAI else catalogContentType,
+
 								sources = catalogSources,
 							),
 						)
