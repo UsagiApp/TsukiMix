@@ -244,7 +244,7 @@ class DirectTachiyomiExtensionManager(
 							TachiyomiMangaSource(
 								catalogueSource = source,
 								pkgName = updated.packageName,
-								isNsfw = updated.isNsfw,
+								contentType = updated.contentType,
 								hasLanguageSuffix = false,
 								extensionName = updated.name,
 							)
