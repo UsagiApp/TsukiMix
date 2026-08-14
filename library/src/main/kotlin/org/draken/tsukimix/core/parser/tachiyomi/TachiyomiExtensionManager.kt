@@ -110,6 +110,8 @@ class TachiyomiExtensionManager(
 					pkgName = success.pkgName,
 					isNsfw = success.isNsfw,
 					hasLanguageSuffix = (counts[source.name] ?: 0) > 1,
+					extensionName = success.appName,
+					isPreInstalledApk = true,
 				)
 			}
 		}

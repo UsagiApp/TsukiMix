@@ -239,7 +239,14 @@ class DirectTachiyomiExtensionManager(
 						)
 					successful += updated
 					result.catalogueSources.forEach { source ->
-						val wrapped = TachiyomiMangaSource(source, updated.packageName, updated.isNsfw, hasLanguageSuffix = false)
+						val wrapped =
+							TachiyomiMangaSource(
+								catalogueSource = source,
+								pkgName = updated.packageName,
+								isNsfw = updated.isNsfw,
+								hasLanguageSuffix = false,
+								extensionName = updated.name,
+							)
 						sources += wrapped
 						sourceById[wrapped.sourceId] = wrapped
 						sourceByName[wrapped.name] = wrapped

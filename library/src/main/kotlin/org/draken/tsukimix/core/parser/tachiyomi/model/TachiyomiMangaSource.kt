@@ -10,6 +10,10 @@ data class TachiyomiMangaSource(
 	val pkgName: String,
 	val isNsfw: Boolean = false,
 	val hasLanguageSuffix: Boolean = false,
+	/** The extension label shown to users, from the installed APK or direct catalog record. */
+	val extensionName: String? = null,
+	/** True only when Android has installed this extension as a package. */
+	val isPreInstalledApk: Boolean = false,
 ) : MangaSource {
 	override val name: String
 		get() = "EXTERNAL_${catalogueSource.id}"
