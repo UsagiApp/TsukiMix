@@ -711,12 +711,14 @@ data class DirectTachiyomiFailure(
 private const val CATALOG_KEY_REPOSITORIES = "repositories"
 private const val CATALOG_KEY_IGNORED_PACKAGES = "ignored_packages"
 private const val CATALOG_KEY_REPOSITORY_NAMES = "repository_names"
+private const val CATALOG_CACHE_DIR = "tachiyomi-catalog-cache"
 
 class TachiyomiExtensionCatalogProvider(
 	private val context: Context,
 	private val httpClient: OkHttpClient,
 ) {
 		private val preferences by lazy { context.getSharedPreferences("tachiyomi_catalogs", Context.MODE_PRIVATE) }
+		private val cacheDirectory by lazy { File(context.filesDir, CATALOG_CACHE_DIR).also { it.mkdirs() } }
 		private val catalogClient by lazy {
 			httpClient
 				.newBuilder()
@@ -772,6 +774,7 @@ class TachiyomiExtensionCatalogProvider(
 			val current = preferences.getStringSet(CATALOG_KEY_REPOSITORIES, emptySet()).orEmpty()
 			val names = runCatching { JSONObject(preferences.getString(CATALOG_KEY_REPOSITORY_NAMES, "{}").orEmpty()) }.getOrElse { JSONObject() }
 			names.remove(normalized)
+			cacheFile(normalized).delete()
 			preferences.edit {
 				putStringSet(CATALOG_KEY_REPOSITORIES, current - normalized)
 				putString(CATALOG_KEY_REPOSITORY_NAMES, names.toString())
@@ -788,13 +791,23 @@ class TachiyomiExtensionCatalogProvider(
 			preferences.edit { putStringSet(CATALOG_KEY_IGNORED_PACKAGES, current - packageName) }
 		}
 
+		suspend fun loadSavedCached(): List<TachiyomiExtensionArtifact> =
+			withContext(Dispatchers.IO) {
+				val ignored = preferences.getStringSet(CATALOG_KEY_IGNORED_PACKAGES, emptySet()).orEmpty()
+				preferences
+					.getStringSet(CATALOG_KEY_REPOSITORIES, emptySet())
+					.orEmpty()
+					.flatMap(::readCachedArtifacts)
+					.filterNot { it.packageName in ignored }
+			}
+
 		suspend fun loadSaved(): List<TachiyomiExtensionArtifact> =
 			withContext(Dispatchers.IO) {
 				val ignored = preferences.getStringSet(CATALOG_KEY_IGNORED_PACKAGES, emptySet()).orEmpty()
 				preferences
 					.getStringSet(CATALOG_KEY_REPOSITORIES, emptySet())
 					.orEmpty()
-					.flatMap { url -> load(url) }
+					.flatMap { url -> load(url).ifEmpty { readCachedArtifacts(url) } }
 					.filterNot { it.packageName in ignored }
 			}
 
@@ -835,6 +848,7 @@ class TachiyomiExtensionCatalogProvider(
 								emptyList()
 							}
 						if (result.isNotEmpty()) {
+							writeCachedArtifacts(normalized ?: url, result)
 							lastLoadError = null
 							return@withContext result
 						}
@@ -845,6 +859,92 @@ class TachiyomiExtensionCatalogProvider(
 
 				emptyList()
 			}
+
+		private fun cacheFile(repositoryUrl: String): File {
+			val hash = MessageDigest.getInstance("SHA-256").digest(repositoryUrl.toByteArray(Charsets.UTF_8)).joinToString("") { byte -> "%02x".format(byte) }
+			return File(cacheDirectory, "$hash.json")
+		}
+
+		private fun writeCachedArtifacts(
+			repositoryUrl: String,
+			artifacts: List<TachiyomiExtensionArtifact>,
+		) {
+			runCatching {
+				val cachedArtifacts = JSONArray()
+				artifacts.forEach { artifact ->
+					val cachedArtifact = JSONObject()
+					cachedArtifact.put("name", artifact.name)
+					cachedArtifact.put("packageName", artifact.packageName)
+					artifact.jarUrl?.let { cachedArtifact.put("jarUrl", it) }
+					artifact.apkUrl?.let { cachedArtifact.put("apkUrl", it) }
+					artifact.iconUrl?.let { cachedArtifact.put("iconUrl", it) }
+					artifact.extensionLib?.let { cachedArtifact.put("extensionLib", it) }
+					artifact.versionCode?.let { cachedArtifact.put("versionCode", it) }
+					artifact.versionName?.let { cachedArtifact.put("versionName", it) }
+					cachedArtifact.put("contentRating", artifact.contentRating.name)
+					val cachedSources = JSONArray()
+					artifact.sources.forEach { source ->
+						val cachedSource = JSONObject()
+						cachedSource.put("id", source.id)
+						cachedSource.put("name", source.name)
+						cachedSource.put("language", source.language)
+						source.homeUrl?.let { cachedSource.put("homeUrl", it) }
+						cachedSource.put("contentRating", source.contentRating.name)
+						cachedSources.put(cachedSource)
+					}
+					cachedArtifact.put("sources", cachedSources)
+					cachedArtifacts.put(cachedArtifact)
+				}
+				val payload = JSONObject()
+				payload.put("repositoryUrl", repositoryUrl)
+				payload.put("artifacts", cachedArtifacts)
+				cacheFile(repositoryUrl).writeText(payload.toString())
+			}
+		}
+
+		private fun readCachedArtifacts(input: String): List<TachiyomiExtensionArtifact> {
+			val repositoryUrl = normalizeUrl(input) ?: return emptyList()
+			val root = runCatching { JSONObject(cacheFile(repositoryUrl).readText()) }.getOrNull() ?: return emptyList()
+			val artifacts = root.optJSONArray("artifacts") ?: return emptyList()
+			return buildList {
+				for (index in 0 until artifacts.length()) {
+					val artifact = artifacts.optJSONObject(index) ?: continue
+					val packageName = artifact.optString("packageName").takeIf { it.isNotBlank() } ?: continue
+					val extensionLib = artifact.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
+					val sources =
+						buildList {
+							val sourceArray = artifact.optJSONArray("sources") ?: return@buildList
+							for (sourceIndex in 0 until sourceArray.length()) {
+								val source = sourceArray.optJSONObject(sourceIndex) ?: continue
+								add(
+									TachiyomiCatalogSource(
+										id = source.optLong("id"),
+										name = source.optString("name", packageName),
+										language = source.optString("language", "all"),
+										homeUrl = source.optString("homeUrl").takeIf { it.isNotBlank() },
+										contentRating = TachiyomiContentRating.fromCatalog(source.optString("contentRating"), extensionLib),
+									),
+								)
+							}
+						}
+					add(
+						TachiyomiExtensionArtifact(
+							repositoryUrl = root.optString("repositoryUrl", repositoryUrl),
+							name = artifact.optString("name", packageName),
+							packageName = packageName,
+							jarUrl = artifact.optString("jarUrl").takeIf { it.isNotBlank() },
+							apkUrl = artifact.optString("apkUrl").takeIf { it.isNotBlank() },
+							iconUrl = artifact.optString("iconUrl").takeIf { it.isNotBlank() },
+							extensionLib = extensionLib,
+							versionCode = artifact.optString("versionCode").toLongOrNull(),
+							versionName = artifact.optString("versionName").takeIf { it.isNotBlank() },
+							contentRating = TachiyomiContentRating.fromCatalog(artifact.optString("contentRating"), extensionLib),
+							sources = sources,
+						),
+					)
+				}
+			}.distinctBy { it.packageName }
+		}
 
 		fun normalizeUrl(input: String): String? {
 			val raw = input.trim().removeSuffix("/")
