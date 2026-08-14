@@ -1041,7 +1041,7 @@ class TachiyomiExtensionCatalogProvider(
 													source.optString("name", packageName),
 													language,
 													source.optString("homeUrl").takeIf { it.isNotBlank() },
-													contentTypeFromCatalog(sourceContentType, extensionLib),
+													contentTypeFromCatalog(sourceContentType, extensionLib, catalogContentType),
 												),
 											)
 
