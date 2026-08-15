@@ -4,23 +4,18 @@ import android.net.Uri
 import eu.kanade.tachiyomi.network.ProgressListener
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.Transient
 
-@Serializable
 open class Page(
 	val index: Int,
 	val url: String = "",
 	var imageUrl: String? = null,
 	// Deprecated but kept for extension compatibility — excluded from serialization
-	@Transient var uri: Uri? = null,
+	var uri: Uri? = null,
 ) : ProgressListener {
 	val number: Int
 		get() = index + 1
 
-	@Transient
 	private val _statusFlow = MutableStateFlow<State>(State.Queue)
-	@Transient
 	val statusFlow = _statusFlow.asStateFlow()
 	var status: State
 		get() = _statusFlow.value
@@ -28,9 +23,7 @@ open class Page(
 			_statusFlow.value = value
 		}
 
-	@Transient
 	private val _progressFlow = MutableStateFlow(0)
-	@Transient
 	val progressFlow = _progressFlow.asStateFlow()
 	var progress: Int
 		get() = _progressFlow.value
