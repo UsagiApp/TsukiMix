@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.withLock
 import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiLoadResult
 import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiMangaSource
 import java.lang.ref.WeakReference
+import tsuki.model.ContentType
 
 class TachiyomiExtensionManager(
 	private val context: Context,
@@ -108,8 +109,10 @@ class TachiyomiExtensionManager(
 				TachiyomiMangaSource(
 					catalogueSource = source,
 					pkgName = success.pkgName,
-					isNsfw = success.isNsfw,
+					contentType = if (success.isNsfw) ContentType.HENTAI else ContentType.MANGA,
 					hasLanguageSuffix = (counts[source.name] ?: 0) > 1,
+					extensionName = success.appName,
+					isPreInstalledApk = true,
 				)
 			}
 		}
