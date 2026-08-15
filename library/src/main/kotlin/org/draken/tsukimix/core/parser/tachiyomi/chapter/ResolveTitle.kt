@@ -1,13 +1,13 @@
 package org.draken.tsukimix.core.parser.tachiyomi.chapter
 
 /**
- * Verbatim port of Mihon's ChapterRecognition (mihon/domain/.../ChapterRecognition.kt). Used by the
+ * Verbatim port of Mihon's ResolveTitle (mihon/domain/.../ResolveTitle.kt). Used by the
  * Mihon compat layer to derive a chapter number from the chapter name when the extension didn't
  * provide one — matching Mihon exactly instead of falling back to a synthetic sequential index.
  *
  * -R> = regex conversion.
  */
-object ChapterRecognition {
+object ResolveTitle {
 
 	private const val NUMBER_PATTERN = """([0-9]+)(\.[0-9]+)?(\.?[a-z]+)?"""
 

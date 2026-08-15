@@ -4,25 +4,25 @@ import android.content.Context
 import androidx.core.content.edit
 import androidx.core.os.ConfigurationCompat
 import androidx.preference.PreferenceManager
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiMangaSource
+import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
 import java.util.Locale
 
-internal class TachiyomiLanguageResolver(context: Context) {
+internal class ExtensionLangResolver(context: Context) {
 
 	private val appContext = context.applicationContext
 	private val prefs = PreferenceManager.getDefaultSharedPreferences(appContext)
 
 	fun getVariants(
-		source: TachiyomiMangaSource,
-		sources: List<TachiyomiMangaSource>,
-	): List<TachiyomiMangaSource> = sources.filter { it.hasSameIdentity(source) }
+        source: Manga,
+        sources: List<Manga>,
+	): List<Manga> = sources.filter { it.hasSameIdentity(source) }
 
 	fun getActiveLanguage(
-		source: TachiyomiMangaSource,
-		sources: List<TachiyomiMangaSource>,
+        source: Manga,
+        sources: List<Manga>,
 	): String? = selectLanguage(getVariants(source, sources))
 
-	fun selectActive(sources: List<TachiyomiMangaSource>): List<TachiyomiMangaSource> {
+	fun selectActive(sources: List<Manga>): List<Manga> {
 		return sources.groupBy { it.pkgName to it.displayName }.values.map { variants ->
 			val language = selectLanguage(variants)
 			variants.firstOrNull { it.locale.equals(language, ignoreCase = true) } ?: variants.first()
@@ -30,15 +30,15 @@ internal class TachiyomiLanguageResolver(context: Context) {
 	}
 
 	fun resolve(
-		source: TachiyomiMangaSource,
-		sources: List<TachiyomiMangaSource>,
-	): TachiyomiMangaSource {
+        source: Manga,
+        sources: List<Manga>,
+	): Manga {
 		val variants = getVariants(source, sources)
 		val language = selectLanguage(variants)
 		return variants.firstOrNull { it.locale.equals(language, ignoreCase = true) } ?: source
 	}
 
-	fun setActiveLanguage(source: TachiyomiMangaSource, language: String) {
+	fun setActiveLanguage(source: Manga, language: String) {
 		val suffix = source.preferenceSuffix
 		val current = prefs.getStringSet(KEY_ACTIVE_LANGUAGES, emptySet()).orEmpty()
 		prefs.edit {
@@ -49,7 +49,7 @@ internal class TachiyomiLanguageResolver(context: Context) {
 		}
 	}
 
-	private fun selectLanguage(variants: List<TachiyomiMangaSource>): String? {
+	private fun selectLanguage(variants: List<Manga>): String? {
 		if (variants.isEmpty()) return null
 		val languages = variants.map { it.locale }
 		val stored = prefs.getStringSet(KEY_ACTIVE_LANGUAGES, emptySet()).orEmpty()
@@ -66,10 +66,10 @@ internal class TachiyomiLanguageResolver(context: Context) {
 		get() = ConfigurationCompat.getLocales(appContext.resources.configuration).get(0)?.language
 			?: Locale.getDefault().language
 
-	private val TachiyomiMangaSource.preferenceSuffix: String
+	private val Manga.preferenceSuffix: String
 		get() = "\n$pkgName\n$displayName"
 
-	private fun TachiyomiMangaSource.hasSameIdentity(other: TachiyomiMangaSource): Boolean {
+	private fun Manga.hasSameIdentity(other: Manga): Boolean {
 		return pkgName == other.pkgName && displayName == other.displayName
 	}
 

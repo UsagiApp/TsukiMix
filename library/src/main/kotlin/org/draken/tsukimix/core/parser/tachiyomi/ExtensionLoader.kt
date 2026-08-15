@@ -16,19 +16,19 @@ import eu.kanade.tachiyomi.util.system.ChildFirstPathClassLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiExtensionInfo
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiLoadResult
+import org.draken.tsukimix.core.parser.tachiyomi.model.MangaResult
 
-class TachiyomiExtensionLoader(
-	private val injektBridge: () -> TachiyomiInjektBridge,
+class ExtensionLoader(
+	private val injektBridge: () -> ExtensionBridge,
 ) {
-	suspend fun loadExtensions(context: Context): List<TachiyomiLoadResult> = withContext(Dispatchers.IO) {
+	suspend fun loadExtensions(context: Context): List<MangaResult> = withContext(Dispatchers.IO) {
 		injektBridge().initialize()
 		getInstalledPackages(context.packageManager)
 			.filter(::isPackageAnExtension)
 			.map { pkgInfo -> loadExtension(context, pkgInfo) }
 	}
 
-	suspend fun loadExtension(context: Context, packageName: String): TachiyomiLoadResult? = withContext(Dispatchers.IO) {
+	suspend fun loadExtension(context: Context, packageName: String): MangaResult? = withContext(Dispatchers.IO) {
 		injektBridge().initialize()
 		val pkgInfo = try {
 			context.packageManager.getPackageInfo(packageName, packageFlags)
@@ -68,7 +68,7 @@ class TachiyomiExtensionLoader(
 		)
 	}
 
-	private fun loadExtension(context: Context, pkgInfo: PackageInfo): TachiyomiLoadResult {
+	private fun loadExtension(context: Context, pkgInfo: PackageInfo): MangaResult {
 		val appInfo = pkgInfo.applicationInfo
 			?: return buildLoggedError(pkgInfo.packageName, "No ApplicationInfo")
 		val metaData = appInfo.metaData
@@ -102,7 +102,7 @@ class TachiyomiExtensionLoader(
 		if (sources.isEmpty()) {
 			return buildLoggedError(pkgInfo.packageName, "No sources loaded")
 		}
-		return TachiyomiLoadResult.Success(
+		return MangaResult.Success(
 			pkgName = pkgInfo.packageName,
 			appName = appName,
 			versionCode = PackageInfoCompat.getLongVersionCode(pkgInfo),
@@ -135,8 +135,8 @@ class TachiyomiExtensionLoader(
 			}
 	}
 
-	private fun buildLoggedError(pkgName: String, message: String, exception: Throwable? = null): TachiyomiLoadResult.Error {
-		return TachiyomiLoadResult.Error(pkgName, message, exception)
+	private fun buildLoggedError(pkgName: String, message: String, exception: Throwable? = null): MangaResult.Error {
+		return MangaResult.Error(pkgName, message, exception)
 	}
 
 	private fun isPackageAnExtension(pkgInfo: PackageInfo): Boolean {

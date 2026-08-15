@@ -9,9 +9,6 @@ import androidx.preference.PreferenceManager
 import eu.kanade.tachiyomi.network.AndroidCookieJar
 import eu.kanade.tachiyomi.network.JavaScriptEngine
 import eu.kanade.tachiyomi.network.NetworkHelper
-import eu.kanade.tachiyomi.network.interceptor.CloudflareInterceptor
-import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
-import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
 import kotlinx.serialization.SerialFormat
 import kotlinx.serialization.StringFormat
 import kotlinx.serialization.json.Json
@@ -29,56 +26,10 @@ import uy.kohesive.injekt.api.InjektModule
 import uy.kohesive.injekt.api.InjektRegistrar
 import uy.kohesive.injekt.api.addSingleton
 import uy.kohesive.injekt.api.addSingletonFactory
-import java.util.concurrent.TimeUnit
 
 private const val DEFAULT_USER_AGENT = UserAgents.CHROME_MOBILE
 
-class TachiyomiNetworkHelper(
-	private val context: Context,
-	private val baseClient: OkHttpClient,
-	private val androidCookieJar: AndroidCookieJar,
-	private val userAgentProvider: () -> String,
-) : NetworkHelper() {
-	override val cookieJar: AndroidCookieJar
-		get() = androidCookieJar
-
-	override val nonCloudflareClient: OkHttpClient
-		get() = client
-
-	override val client: OkHttpClient = baseClient.newBuilder().apply {
-		interceptors().clear()
-		networkInterceptors().clear()
-		callTimeout(2, TimeUnit.MINUTES)
-		cookieJar(androidCookieJar)
-		addInterceptor(UncaughtExceptionInterceptor())
-		addInterceptor(UserAgentInterceptor(::defaultUserAgentProvider))
-		addInterceptor(TachiyomiDomainInterceptor())
-		baseClient.interceptors
-			.filterNot { it.javaClass.simpleName in skipInterceptors }
-			.forEach(::addInterceptor)
-		addInterceptor(CloudflareInterceptor(context, androidCookieJar, ::defaultUserAgentProvider))
-		baseClient.networkInterceptors
-			.filterNot { it.javaClass.simpleName == "CacheLimitInterceptor" }
-			.forEach(::addNetworkInterceptor)
-	}.build()
-
-	@Deprecated("The regular client handles Cloudflare by default")
-	override val cloudflareClient: OkHttpClient
-		get() = client
-
-	override fun defaultUserAgentProvider(): String = userAgentProvider()
-
-	private companion object {
-		val skipInterceptors = setOf(
-			"GZipInterceptor",
-			"CloudFlareInterceptor",
-			"RateLimitInterceptor",
-			"CommonHeadersInterceptor",
-		)
-	}
-}
-
-class TachiyomiInjektBridge(
+class ExtensionBridge(
 	private val context: Context,
 	private val httpClient: OkHttpClient,
 	private val defaultUserAgentProvider: () -> String,
@@ -92,7 +43,7 @@ class TachiyomiInjektBridge(
 	@Synchronized
 	fun initialize() {
 		if (initialized) return
-		val networkHelper = TachiyomiNetworkHelper(
+		val networkHelper = ExtensionNetworkHelper(
 			context = context,
 			baseClient = httpClient,
 			androidCookieJar = androidCookieJar,

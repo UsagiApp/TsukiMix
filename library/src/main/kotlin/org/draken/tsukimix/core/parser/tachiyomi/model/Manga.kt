@@ -1,3 +1,5 @@
+@file:Suppress("unused")
+
 package org.draken.tsukimix.core.parser.tachiyomi.model
 
 import eu.kanade.tachiyomi.source.CatalogueSource
@@ -5,11 +7,15 @@ import tsuki.model.ContentType
 import tsuki.model.MangaSource
 import java.util.Locale
 
-data class TachiyomiMangaSource(
+data class Manga(
 	val catalogueSource: CatalogueSource,
 	val pkgName: String,
-	val isNsfw: Boolean = false,
+	override val contentType: ContentType = ContentType.MANGA,
 	val hasLanguageSuffix: Boolean = false,
+	/** The extension label shown to users, from the installed APK or direct catalog record. */
+	val extName: String? = null,
+	/** True only when Android has installed this extension as a package. */
+	val isPreInstalled: Boolean = false,
 ) : MangaSource {
 	override val name: String
 		get() = "EXTERNAL_${catalogueSource.id}"
@@ -17,8 +23,8 @@ data class TachiyomiMangaSource(
 	override val locale: String
 		get() = catalogueSource.lang
 
-	override val contentType: ContentType
-		get() = if (isNsfw) ContentType.HENTAI else ContentType.MANGA
+	val isNsfw: Boolean
+		get() = contentType == ContentType.HENTAI
 
 	override val title: String
 		get() = catalogueSource.name

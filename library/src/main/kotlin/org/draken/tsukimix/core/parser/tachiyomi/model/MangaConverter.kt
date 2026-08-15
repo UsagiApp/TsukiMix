@@ -1,10 +1,12 @@
+@file:Suppress("unused")
+
 package org.draken.tsukimix.core.parser.tachiyomi.model
 
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
-import org.draken.tsukimix.core.parser.tachiyomi.chapter.ChapterRecognition
+import org.draken.tsukimix.core.parser.tachiyomi.chapter.ResolveTitle
 import tsuki.model.ContentRating
 import tsuki.model.Manga
 import tsuki.model.MangaChapter
@@ -15,7 +17,7 @@ import tsuki.model.RATING_UNKNOWN
 import java.util.zip.CRC32
 
 fun SManga.toManga(
-	source: TachiyomiMangaSource,
+	source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga,
 	fallbackUrl: String? = null,
 	fallbackTitle: String? = null,
 ): Manga {
@@ -59,12 +61,12 @@ fun Manga.toSManga(): SManga = SManga.create().also {
 	it.initialized = true
 }
 
-fun SChapter.toMangaChapter(source: TachiyomiMangaSource, mangaTitle: String, fallbackIndex: Int = 0): MangaChapter {
+fun SChapter.toMangaChapter(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga, mangaTitle: String, fallbackIndex: Int = 0): MangaChapter {
 	val safeUrl = runCatching { url }.getOrNull()?.takeIf { it.isNotBlank() }
 		?: "$mangaTitle#$fallbackIndex"
 	val safeName = runCatching { name }.getOrNull().orEmpty()
 	val number = chapter_number.takeIf { it >= 0f }
-		?: ChapterRecognition.parseChapterNumber(mangaTitle, safeName).toFloat().takeIf { it >= 0f }
+		?: ResolveTitle.parseChapterNumber(mangaTitle, safeName).toFloat().takeIf { it >= 0f }
 		?: 0f
 	return MangaChapter(
 		id = stableId(source.name, safeUrl),
@@ -87,7 +89,7 @@ fun MangaChapter.toSChapter(): SChapter = SChapter.create().also {
 	it.date_upload = uploadDate
 }
 
-fun Page.toMangaPage(source: TachiyomiMangaSource, resolvedUrl: String): MangaPage = MangaPage(
+fun Page.toMangaPage(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga, resolvedUrl: String): MangaPage = MangaPage(
 	id = stableId(source.name, "$index:$resolvedUrl"),
 	url = resolvedUrl,
 	preview = null,

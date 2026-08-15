@@ -12,10 +12,10 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.Response
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiMangaSource
+import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
 import java.util.concurrent.ConcurrentHashMap
 
-object TachiyomiSourceSettings {
+object ExtensionSourceSettings {
 
 	const val KEY_DOMAIN = "domain"
 	const val KEY_OVERRIDE_BASE_URL = "overrideBaseUrl"
@@ -23,7 +23,7 @@ object TachiyomiSourceSettings {
 	private const val KEY_SLOWDOWN = "slowdown"
 	private val SOURCE_REGEX = "[^a-zA-Z0-9]".toRegex()
 
-	private fun prefsName(source: TachiyomiMangaSource): String {
+	private fun prefsName(source: Manga): String {
 		return source.name.substringAfter(':').replace(SOURCE_REGEX, "_") + "_settings"
 	}
 
@@ -38,7 +38,7 @@ object TachiyomiSourceSettings {
 		}
 	}.isSuccess
 
-	fun preferences(context: Context, source: TachiyomiMangaSource): SharedPreferences {
+	fun preferences(context: Context, source: Manga): SharedPreferences {
 		val configurableSource = source.catalogueSource as? ConfigurableSource
 			?: return context.getSharedPreferences(prefsName(source), Context.MODE_PRIVATE)
 		return try {
@@ -50,13 +50,13 @@ object TachiyomiSourceSettings {
 		}
 	}
 
-	fun browserUrl(context: Context, source: TachiyomiMangaSource): String? {
+	fun browserUrl(context: Context, source: Manga): String? {
 		val httpSource = source.catalogueSource as? HttpSource ?: return null
 		val domain = domain(context, source) ?: return httpSource.baseUrl
 		return httpSource.baseUrl.toUri().buildUpon().authority(domain).build().toString()
 	}
 
-	fun refreshDomainOverride(context: Context, source: TachiyomiMangaSource) {
+	fun refreshDomainOverride(context: Context, source: Manga) {
 		val httpSource = source.catalogueSource as? HttpSource ?: return
 		val prefs = preferences(context, source)
 		val domain = domain(prefs)
@@ -72,7 +72,7 @@ object TachiyomiSourceSettings {
 		TachiyomiDomainOverrides.set(baseHost, domain)
 	}
 
-	fun mergeDomainPreference(context: Context, source: TachiyomiMangaSource) {
+	fun mergeDomainPreference(context: Context, source: Manga) {
 		val prefs = preferences(context, source)
 		if (!prefs.contains(KEY_DOMAIN)) {
 			val current = prefs.getString(KEY_OVERRIDE_BASE_URL, null)?.toHttpUrlOrNull()
@@ -84,11 +84,11 @@ object TachiyomiSourceSettings {
 		refreshDomainOverride(context, source)
 	}
 
-	fun isSlowdownEnabled(context: Context, source: TachiyomiMangaSource): Boolean {
+	fun isSlowdownEnabled(context: Context, source: Manga): Boolean {
 		return preferences(context, source).getBoolean(KEY_SLOWDOWN, false)
 	}
 
-	private fun domain(context: Context, source: TachiyomiMangaSource): String? {
+	private fun domain(context: Context, source: Manga): String? {
 		return domain(preferences(context, source))
 	}
 

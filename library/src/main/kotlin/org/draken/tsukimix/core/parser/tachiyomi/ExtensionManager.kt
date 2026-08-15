@@ -9,30 +9,31 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiLoadResult
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiMangaSource
+import org.draken.tsukimix.core.parser.tachiyomi.model.MangaResult
+import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
 import java.lang.ref.WeakReference
+import tsuki.model.ContentType
 
-class TachiyomiExtensionManager(
+class ExtensionManager(
 	private val context: Context,
-	private val loader: TachiyomiExtensionLoader,
+	private val loader: ExtensionLoader,
 ) {
 	private val refreshMutex = Mutex()
-	private val sourcesById = HashMap<Long, TachiyomiMangaSource>()
-	private val sourcesByName = HashMap<String, TachiyomiMangaSource>()
-	private val resolver = TachiyomiLanguageResolver(context)
+	private val sourcesById = HashMap<Long, Manga>()
+	private val sourcesByName = HashMap<String, Manga>()
+	private val resolver = ExtensionLangResolver(context)
 
-	private val _installedExtensions = MutableStateFlow<List<TachiyomiLoadResult.Success>>(emptyList())
-	private val _failedExtensions = MutableStateFlow<List<TachiyomiLoadResult.Error>>(emptyList())
+	private val _installedExtensions = MutableStateFlow<List<MangaResult.Success>>(emptyList())
+	private val _failedExtensions = MutableStateFlow<List<MangaResult.Error>>(emptyList())
 	private val _isLoading = MutableStateFlow(false)
 	private val _isReady = MutableStateFlow(false)
-	private val _sources = MutableStateFlow<List<TachiyomiMangaSource>>(emptyList())
+	private val _sources = MutableStateFlow<List<Manga>>(emptyList())
 
-	val installedExtensions: StateFlow<List<TachiyomiLoadResult.Success>> = _installedExtensions
-	val failedExtensions: StateFlow<List<TachiyomiLoadResult.Error>> = _failedExtensions
+	val installedExtensions: StateFlow<List<MangaResult.Success>> = _installedExtensions
+	val failedExtensions: StateFlow<List<MangaResult.Error>> = _failedExtensions
 	val isLoading: StateFlow<Boolean> = _isLoading
 	val isReady: StateFlow<Boolean> = _isReady
-	val sources: StateFlow<List<TachiyomiMangaSource>> = _sources
+	val sources: StateFlow<List<Manga>> = _sources
 
 	init {
 		activeInstance = WeakReference(this)
@@ -47,9 +48,9 @@ class TachiyomiExtensionManager(
 			_isLoading.value = true
 			try {
 				val results = loader.loadExtensions(context)
-				val successes = results.filterIsInstance<TachiyomiLoadResult.Success>()
+				val successes = results.filterIsInstance<MangaResult.Success>()
 				_installedExtensions.value = successes
-				_failedExtensions.value = results.filterIsInstance<TachiyomiLoadResult.Error>()
+				_failedExtensions.value = results.filterIsInstance<MangaResult.Error>()
 				publish(successes)
 				_isReady.value = true
 			} finally {
@@ -68,30 +69,30 @@ class TachiyomiExtensionManager(
 		}
 	}
 
-	fun getSourceById(sourceId: Long): TachiyomiMangaSource? = sourcesById[sourceId]
+	fun getSourceById(sourceId: Long): Manga? = sourcesById[sourceId]
 
-	fun getSourceByName(name: String): TachiyomiMangaSource? {
+	fun getSourceByName(name: String): Manga? {
 		return sourcesByName[name]
 			?: name.removePrefix("EXTERNAL_").substringBefore(':').toLongOrNull()?.let(sourcesById::get)
 	}
 
-	fun getSources(): List<TachiyomiMangaSource> = sourcesById.values.toList()
+	fun getSources(): List<Manga> = sourcesById.values.toList()
 
-	fun getActiveSources(): List<TachiyomiMangaSource> = resolver.selectActive(_sources.value)
+	fun getActiveSources(): List<Manga> = resolver.selectActive(_sources.value)
 
-	fun getLanguage(source: TachiyomiMangaSource): List<TachiyomiMangaSource> {
+	fun getLanguage(source: Manga): List<Manga> {
 		return resolver.getVariants(source, _sources.value)
 	}
 
-	fun getActiveLanguage(source: TachiyomiMangaSource): String? {
+	fun getActiveLanguage(source: Manga): String? {
 		return resolver.getActiveLanguage(source, _sources.value)
 	}
 
-	fun setActiveLanguage(source: TachiyomiMangaSource, language: String) {
+	fun setActiveLanguage(source: Manga, language: String) {
 		resolver.setActiveLanguage(source, language)
 	}
 
-	fun resolve(source: TachiyomiMangaSource): TachiyomiMangaSource {
+	fun resolve(source: Manga): Manga {
 		return resolver.resolve(source, _sources.value)
 	}
 
@@ -101,15 +102,17 @@ class TachiyomiExtensionManager(
 			.groupBy { it.lang }
 	}
 
-	private fun publish(successes: List<TachiyomiLoadResult.Success>) {
+	private fun publish(successes: List<MangaResult.Success>) {
 		val wrapped = successes.flatMap { success ->
 			val counts = success.catalogueSources.groupingBy { it.name }.eachCount()
 			success.catalogueSources.map { source ->
-				TachiyomiMangaSource(
+				Manga(
 					catalogueSource = source,
 					pkgName = success.pkgName,
-					isNsfw = success.isNsfw,
+					contentType = if (success.isNsfw) ContentType.HENTAI else ContentType.MANGA,
 					hasLanguageSuffix = (counts[source.name] ?: 0) > 1,
+					extName = success.appName,
+					isPreInstalled = true,
 				)
 			}
 		}
@@ -124,8 +127,8 @@ class TachiyomiExtensionManager(
 
 	companion object {
 		@Volatile
-		private var activeInstance = WeakReference<TachiyomiExtensionManager>(null)
+		private var activeInstance = WeakReference<ExtensionManager>(null)
 
-		fun getByName(name: String): TachiyomiMangaSource? = activeInstance.get()?.getSourceByName(name)
+		fun getByName(name: String): Manga? = activeInstance.get()?.getSourceByName(name)
 	}
 }
