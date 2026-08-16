@@ -168,12 +168,11 @@ class ExtensionLoader(
 
 	private fun readNsfwFlag(metaData: Bundle): Boolean {
 		if (metaData.getInt(METADATA_CONTENT_WARNING, 0) > 0) return true
+		val cwStr = metaData.getString(METADATA_CONTENT_WARNING)
+		if (!cwStr.isNullOrBlank() && org.draken.tsukimix.core.parser.tachiyomi.model.contentTypeFromCatalog(cwStr) == tsuki.model.ContentType.HENTAI) return true
 		if (!metaData.containsKey(METADATA_NSFW)) return false
-		return runCatching { metaData.getInt(METADATA_NSFW) != 0 }
-			.getOrElse {
-				runCatching { metaData.getBoolean(METADATA_NSFW) }
-					.getOrElse { metaData.getString(METADATA_NSFW).toBoolean() }
-			}
+		val raw = metaData.get(METADATA_NSFW)
+		return org.draken.tsukimix.core.parser.tachiyomi.model.contentTypeFromCatalog(raw) == tsuki.model.ContentType.HENTAI
 	}
 
 	private fun extractLanguage(packageName: String): String {

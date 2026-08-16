@@ -14,6 +14,7 @@ import tsuki.model.MangaPage
 import tsuki.model.MangaState
 import tsuki.model.MangaTag
 import tsuki.model.RATING_UNKNOWN
+import java.util.Locale
 import java.util.zip.CRC32
 
 fun SManga.toManga(
@@ -61,6 +62,25 @@ fun Manga.toSManga(): SManga = SManga.create().also {
 	it.initialized = true
 }
 
+fun branchNameFor(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga, scanlator: String? = null): String? {
+	val lang =
+		if (source.locale.isBlank() || source.locale.equals("all", ignoreCase = true)) {
+			null
+		} else {
+			val loc = Locale.forLanguageTag(source.locale)
+			loc.getDisplayName(loc).takeIf { it.isNotBlank() && it != source.locale }
+				?: loc.getDisplayName(Locale.getDefault()).takeIf { it.isNotBlank() && it != source.locale }
+				?: loc.displayLanguage.takeIf { it.isNotBlank() }
+				?: source.locale.uppercase()
+		}
+	val group = scanlator?.trim()?.takeIf { it.isNotBlank() }
+	return when {
+		lang != null && group != null -> "$lang ($group)"
+		group != null -> group
+		else -> lang
+	}
+}
+
 fun SChapter.toMangaChapter(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga, mangaTitle: String, fallbackIndex: Int = 0): MangaChapter {
 	val safeUrl = runCatching { url }.getOrNull()?.takeIf { it.isNotBlank() }
 		?: "$mangaTitle#$fallbackIndex"
@@ -68,15 +88,16 @@ fun SChapter.toMangaChapter(source: org.draken.tsukimix.core.parser.tachiyomi.mo
 	val number = chapter_number.takeIf { it >= 0f }
 		?: ResolveTitle.parseChapterNumber(mangaTitle, safeName).toFloat().takeIf { it >= 0f }
 		?: 0f
+	val group = runCatching { scanlator }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }
 	return MangaChapter(
 		id = stableId(source.name, safeUrl),
 		title = safeName.takeIf { it.isNotBlank() },
 		number = number,
 		volume = 0,
 		url = safeUrl,
-		scanlator = runCatching { scanlator }.getOrNull(),
+		scanlator = group,
 		uploadDate = runCatching { date_upload }.getOrDefault(0),
-		branch = source.locale.takeIf { it.isNotBlank() },
+		branch = branchNameFor(source, group),
 		source = source,
 	)
 }

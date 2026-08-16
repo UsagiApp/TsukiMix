@@ -43,24 +43,56 @@ class ExtensionProvider(
 		prefs.edit { putStringSet("repositories", prefs.getStringSet("repositories", emptySet()).orEmpty() + url) }
 	}
 
+	fun canonicalKey(input: String): String {
+		val raw = input.trim().removeSuffix("/")
+		val gh = GITHUB_REGEX.matchEntire(raw)
+		if (gh != null) return "${gh.groupValues[1]}/${gh.groupValues[2]}".lowercase()
+		val rawGh = RAW_GH_REGEX.matchEntire(raw)
+		if (rawGh != null) return "${rawGh.groupValues[1]}/${rawGh.groupValues[2]}".lowercase()
+		val parts = raw.removePrefix("https://").removePrefix("http://")
+			.removePrefix("raw.githubusercontent.com/").removePrefix("github.com/").removePrefix("www.github.com/")
+			.split('/').filter { it.isNotBlank() }
+		if (parts.size >= 2) return "${parts[0]}/${parts[1]}".lowercase()
+		return normalizeUrl(raw)?.lowercase() ?: raw.lowercase()
+	}
+
 	fun repositoryName(input: String): String? {
-		val url = normalizeUrl(input) ?: return null
-		return runCatching { JSONObject(prefs.getString("repository_names", "{}").orEmpty()).optString(url) }
-			.getOrNull()?.takeIf { it.isNotBlank() }
+		val key = canonicalKey(input)
+		val url = normalizeUrl(input) ?: input.trim().removeSuffix("/")
+		val raw = input.trim().removeSuffix("/")
+		val names = runCatching { JSONObject(prefs.getString("repository_names", "{}").orEmpty()) }.getOrNull() ?: return null
+		return names.optString(key).takeIf { it.isNotBlank() }
+			?: names.optString(url).takeIf { it.isNotBlank() }
+			?: names.optString(raw).takeIf { it.isNotBlank() }
+			?: names.keys().asSequence().firstOrNull { canonicalKey(it) == key }?.let { names.optString(it).takeIf { s -> s.isNotBlank() } }
 	}
 
 	fun setRepositoryName(input: String, name: String?) {
-		val url = normalizeUrl(input) ?: return
+		val key = canonicalKey(input)
+		val url = normalizeUrl(input) ?: input.trim().removeSuffix("/")
 		val names = runCatching { JSONObject(prefs.getString("repository_names", "{}").orEmpty()) }.getOrElse { JSONObject() }
-		if (name.isNullOrBlank()) names.remove(url) else names.put(url, name.trim())
+		if (name.isNullOrBlank()) {
+			names.remove(key)
+			names.remove(url)
+			names.remove(input.trim().removeSuffix("/"))
+			val keysToRemove = names.keys().asSequence().filter { canonicalKey(it) == key }.toList()
+			keysToRemove.forEach { names.remove(it) }
+		} else {
+			names.put(key, name.trim())
+			names.put(url, name.trim())
+		}
 		prefs.edit { putString("repository_names", names.toString()) }
 	}
 
 	fun removeRepository(input: String) {
 		val url = normalizeUrl(input) ?: return
+		val key = canonicalKey(input)
 		cacheFile(url).delete()
 		val names = runCatching { JSONObject(prefs.getString("repository_names", "{}").orEmpty()) }.getOrElse { JSONObject() }
 		names.remove(url)
+		names.remove(key)
+		val keysToRemove = names.keys().asSequence().filter { canonicalKey(it) == key }.toList()
+		keysToRemove.forEach { names.remove(it) }
 		prefs.edit {
 			putStringSet("repositories", prefs.getStringSet("repositories", emptySet()).orEmpty() - url)
 			putString("repository_names", names.toString())
@@ -135,14 +167,20 @@ class ExtensionProvider(
 				put("extensionLib", art.extensionLib)
 				put("versionCode", art.versionCode)
 				put("versionName", art.versionName)
+				put("contentWarning", if (art.isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
 				put("contentType", art.contentType.name)
+				put("isNsfw", art.isNsfw)
+				put("nsfw", if (art.isNsfw) 1 else 0)
 				put("sources", JSONArray(art.sources.map { s ->
 					JSONObject().apply {
 						put("id", s.id)
 						put("name", s.name)
 						put("language", s.language)
 						put("homeUrl", s.homeUrl)
+						put("contentWarning", if (s.isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
 						put("contentType", s.contentType.name)
+						put("isNsfw", s.isNsfw)
+						put("nsfw", if (s.isNsfw) 1 else 0)
 					}
 				}))
 			}
@@ -158,19 +196,22 @@ class ExtensionProvider(
 			val arr = root.optJSONArray("artifacts") ?: return emptyList()
 			(0 until arr.length()).mapNotNull { i ->
 				val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-				val pkg = obj.optString("packageName").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+				val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
 				val lib = obj.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
-				val type = contentTypeFromCatalog(obj.optString("contentType"), lib)
+				val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating") ?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
+				val type = contentTypeFromCatalog(rawNsfw, lib)
 				val srcArr = obj.optJSONArray("sources")
 				val sources = (0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
 					val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
 					val id = s.optLong("id").takeIf { it != 0L } ?: return@mapNotNull null
+					val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
+					val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
 					TachiyomiCatalogSource(
 						id,
 						s.optString("name", pkg),
-						s.optString("language", "all"),
-						s.optString("homeUrl").takeIf { it.isNotBlank() },
-						contentTypeFromCatalog(s.optString("contentType"), lib, type)
+						s.optString("language", "all").ifBlank { s.optString("lang", "all") },
+						s.optString("homeUrl").takeIf { it.isNotBlank() } ?: s.optString("baseUrl").takeIf { it.isNotBlank() },
+						sType,
 					)
 				}
 				TachiyomiExtensionArtifact(
@@ -181,10 +222,10 @@ class ExtensionProvider(
 					obj.optString("apkUrl").takeIf { it.isNotBlank() },
 					obj.optString("iconUrl").takeIf { it.isNotBlank() },
 					lib,
-					obj.optString("versionCode").toLongOrNull(),
-					obj.optString("versionName").takeIf { it.isNotBlank() },
+					obj.optString("versionCode").toLongOrNull() ?: obj.optLong("code", -1L).takeIf { it != -1L },
+					obj.optString("versionName").takeIf { it.isNotBlank() } ?: obj.optString("version").takeIf { it.isNotBlank() },
 					type,
-					sources
+					sources,
 				)
 			}
 		}.getOrDefault(emptyList())
@@ -217,43 +258,77 @@ class ExtensionProvider(
 	}
 
 	private fun parse(repoUrl: String, body: String): List<TachiyomiExtensionArtifact> = runCatching {
-		val root = JSONObject(body.removePrefix("\uFEFF"))
-		val arr = root.optJSONObject("extensionList")?.optJSONArray("extensions") ?: root.optJSONArray("extensions") ?: JSONArray()
+		val trimmed = body.removePrefix("\uFEFF").trim()
+		val arr = when {
+			trimmed.startsWith("[") -> JSONArray(trimmed)
+			else -> {
+				val root = JSONObject(trimmed)
+				root.optJSONObject("extensionList")?.optJSONArray("extensions")
+					?: root.optJSONArray("extensions")
+					?: root.optJSONArray("extensionList")
+					?: JSONArray()
+			}
+		}
+		val baseRepoUrl = repoUrl.substringBeforeLast('/')
 		(0 until arr.length()).mapNotNull { i ->
 			val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-			val pkg = obj.optString("packageName").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+			val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
 			val res = obj.optJSONObject("resources")
-			val lib = obj.optString("extensionLib").toDoubleOrNull()
-			val type =
-				contentTypeFromCatalog(obj.optString("contentType").ifBlank { obj.optString("contentRating") }, lib)
+			val name = obj.optString("name", pkg)
+			val lib = obj.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
+				?: obj.optDouble("libVersion", Double.NaN).takeUnless { it.isNaN() }
+
+			val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating") ?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
+			val type = contentTypeFromCatalog(rawNsfw, lib)
+
+			val apkRaw = obj.optString("apk").ifBlank { obj.optString("apkUrl") }.ifBlank { res?.optString("apkUrl").orEmpty() }
+			val apkUrl = when {
+				apkRaw.isBlank() -> null
+				apkRaw.startsWith("http://") || apkRaw.startsWith("https://") -> apkRaw
+				else -> "$baseRepoUrl/apk/$apkRaw"
+			}
+			val jarRaw = obj.optString("jar").ifBlank { obj.optString("jarUrl") }.ifBlank { res?.optString("jarUrl").orEmpty() }
+			val jarUrl = when {
+				jarRaw.isBlank() -> null
+				jarRaw.startsWith("http://") || jarRaw.startsWith("https://") -> jarRaw
+				else -> "$baseRepoUrl/jar/$jarRaw"
+			}
+			val iconRaw = obj.optString("iconUrl").ifBlank { res?.optString("iconUrl").orEmpty() }
+			val iconUrl = when {
+				iconRaw.isNotBlank() -> iconRaw
+				else -> "$baseRepoUrl/icon/$pkg.png"
+			}
+			val code = obj.optLong("code", -1L).takeIf { it != -1L }
+				?: obj.optLong("versionCode", -1L).takeIf { it != -1L }
+				?: obj.optString("versionCode").toLongOrNull()
+			val versionName = obj.optString("version").ifBlank { obj.optString("versionName") }.takeIf { it.isNotBlank() }
+
 			val srcArr = obj.optJSONArray("sources")
 			val sources = (0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
 				val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
-				val id = s.optString("id").toLongOrNull() ?: return@mapNotNull null
+				val id = s.optLong("id", 0L).takeIf { it != 0L } ?: s.optString("id").toLongOrNull() ?: return@mapNotNull null
+				val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
+				val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
 				TachiyomiCatalogSource(
-					id,
-					s.optString("name", pkg),
-					s.optString("language", "all").ifBlank { "all" },
-					s.optString("homeUrl").takeIf { it.isNotBlank() },
-					contentTypeFromCatalog(
-						s.optString("contentType").ifBlank { s.optString("contentRating") },
-						lib,
-						type
-					)
+					id = id,
+					name = s.optString("name", name),
+					language = s.optString("lang").ifBlank { s.optString("language", "all") },
+					homeUrl = s.optString("baseUrl").ifBlank { s.optString("homeUrl") }.takeIf { it.isNotBlank() },
+					contentType = sType,
 				)
 			}
 			TachiyomiExtensionArtifact(
-				repoUrl,
-				obj.optString("name", pkg),
-				pkg,
-				res?.optString("jarUrl")?.takeIf { it.isNotBlank() },
-				res?.optString("apkUrl")?.takeIf { it.isNotBlank() },
-				res?.optString("iconUrl")?.takeIf { it.isNotBlank() },
-				lib,
-				obj.optString("versionCode").toLongOrNull(),
-				obj.optString("versionName").takeIf { it.isNotBlank() },
-				if (obj.optBoolean("isNsfw")) ContentType.HENTAI else type,
-				sources
+				repositoryUrl = repoUrl,
+				name = name,
+				packageName = pkg,
+				jarUrl = jarUrl,
+				apkUrl = apkUrl,
+				iconUrl = iconUrl,
+				extensionLib = lib,
+				versionCode = code,
+				versionName = versionName,
+				contentType = type,
+				sources = sources,
 			)
 		}
 	}.getOrDefault(emptyList())

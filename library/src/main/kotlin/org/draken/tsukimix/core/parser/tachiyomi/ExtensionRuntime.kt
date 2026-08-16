@@ -40,8 +40,16 @@ class TachiyomiRuntime(
 		installedManager.ensureReady(forceRefresh)
 		directManager.ensureReady(forceRefresh)
 		refreshSourceState()
-		sourcesPublisher?.publish(getActiveSources())
+		sourcesPublisher?.publish(getInstalledSources())
 	}
+
+	fun getInstalledSources(): List<Manga> =
+		(directManager.getActiveSources() + installedManager.getActiveSources())
+			.distinctBy { it.pkgName to it.displayName }
+
+	fun getAllSources(): List<Manga> =
+		(directManager.sources.value + installedManager.sources.value)
+			.distinctBy { it.sourceId }
 
 	fun getActiveSources(): List<Manga> =
 		(directManager.getActiveSources() + installedManager.getActiveSources())
@@ -52,6 +60,7 @@ class TachiyomiRuntime(
 	fun getSourceById(id: Long): Manga? = directManager.getSourceById(id) ?: installedManager.getSourceById(id)
 	fun resolve(s: Manga): Manga = if (directManager.owns(s)) directManager.resolve(s) else installedManager.resolve(s)
 	fun getLanguage(s: Manga): List<Manga> = if (directManager.owns(s)) directManager.getLanguage(s) else installedManager.getLanguage(s)
+	fun getSiblingSources(s: Manga): List<Manga> = getLanguage(s)
 	fun getActiveLanguage(s: Manga): String? = if (directManager.owns(s)) directManager.getActiveLanguage(s) else installedManager.getActiveLanguage(s)
 	fun setActiveLanguage(s: Manga, lang: String) {
 		if (directManager.owns(s)) directManager.setActiveLanguage(s, lang) else installedManager.setActiveLanguage(s, lang)

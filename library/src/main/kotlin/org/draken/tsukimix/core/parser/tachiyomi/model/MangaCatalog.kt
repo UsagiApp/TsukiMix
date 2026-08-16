@@ -13,7 +13,9 @@ data class TachiyomiCatalogSource(
 	val language: String,
 	val homeUrl: String?,
 	val contentType: ContentType = ContentType.MANGA,
-)
+) {
+	val isNsfw: Boolean get() = contentType == ContentType.HENTAI
+}
 
 data class TachiyomiExtensionArtifact(
 	val repositoryUrl: String,
@@ -58,15 +60,20 @@ data class DirectTachiyomiInstalled(
 		put("versionCode", versionCode)
 		put("versionName", versionName)
 		put("libVersion", libVersion)
+		put("contentWarning", if (isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
 		put("contentType", contentType.name)
 		put("isNsfw", isNsfw)
+		put("nsfw", if (isNsfw) 1 else 0)
 		put("sources", JSONArray(sources.map { s ->
 			JSONObject().apply {
 				put("id", s.id)
 				put("name", s.name)
 				put("language", s.language)
 				put("homeUrl", s.homeUrl)
+				put("contentWarning", if (s.isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
 				put("contentType", s.contentType.name)
+				put("isNsfw", s.isNsfw)
+				put("nsfw", if (s.isNsfw) 1 else 0)
 			}
 		}))
 	}
@@ -75,12 +82,15 @@ data class DirectTachiyomiInstalled(
 		fun fromJson(obj: JSONObject): DirectTachiyomiInstalled? = runCatching {
 			val pkg = obj.optString("packageName").takeIf { it.isNotBlank() } ?: return null
 			val libVer = obj.optDouble("libVersion", 1.4)
-			val type = contentTypeFromCatalog(obj.optString("contentType").ifBlank { if (obj.optBoolean("isNsfw")) "HENTAI" else "MANGA" }, libVer)
+			val rawType = obj.opt("contentWarning") ?: obj.opt("contentRating") ?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
+			val type = contentTypeFromCatalog(rawType, libVer)
 			val srcArr = obj.optJSONArray("sources")
 			val srcList = (0 until (srcArr?.length() ?: 0)).mapNotNull { i ->
 				val s = srcArr?.optJSONObject(i) ?: return@mapNotNull null
 				val id = s.optLong("id").takeIf { it != 0L } ?: return@mapNotNull null
-				TachiyomiCatalogSource(id, s.optString("name", pkg), s.optString("language", "all"), s.optString("homeUrl").takeIf { it.isNotBlank() }, contentTypeFromCatalog(s.optString("contentType"), libVer, type))
+				val sRaw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
+				val sType = if (sRaw != null) contentTypeFromCatalog(sRaw, libVer, type) else type
+				TachiyomiCatalogSource(id, s.optString("name", pkg), s.optString("language", "all"), s.optString("homeUrl").takeIf { it.isNotBlank() }, sType)
 			}
 			DirectTachiyomiInstalled(pkg, obj.optString("name", pkg), obj.optString("repositoryUrl"), obj.optString("jarUrl").takeIf { it.isNotBlank() }, obj.optString("apkUrl").takeIf { it.isNotBlank() }, obj.optString("iconUrl").takeIf { it.isNotBlank() }, obj.optLong("versionCode"), obj.optString("versionName", "0.0.0"), libVer, type, srcList)
 		}.getOrNull()
@@ -92,16 +102,34 @@ data class DirectTachiyomiFailure(
 	val message: String,
 )
 
-internal fun contentTypeFromCatalog(raw: String?, lib: Double?, fallback: ContentType = ContentType.MANGA): ContentType {
-	val v = raw?.trim()?.uppercase() ?: return fallback
-	if (v in setOf("HENTAI", "NSFW", "MIXED", "CONTENT_WARNING_NSFW", "CONTENT_WARNING_MIXED")) return ContentType.HENTAI
-	if (v in setOf("MANGA", "SAFE", "CONTENT_WARNING_SAFE")) return ContentType.MANGA
-	val n = v.toIntOrNull() ?: return fallback
-	return if ((lib ?: 1.6) >= 1.6) (if (n == 1) ContentType.MANGA else ContentType.HENTAI) else (if (n == 0) ContentType.MANGA else ContentType.HENTAI)
+fun contentTypeFromCatalog(raw: Any?, lib: Double? = null, fallback: ContentType = ContentType.MANGA): ContentType {
+	if (raw == null) return fallback
+	if (raw is Boolean) return if (raw) ContentType.HENTAI else ContentType.MANGA
+	if (raw is Number) return if (raw.toInt() > 0) ContentType.HENTAI else ContentType.MANGA
+	val v = raw.toString().trim().uppercase()
+	if (v in setOf(
+		"HENTAI", "NSFW", "MIXED", "ADULT", "MATURE", "18+", "R18",
+		"CONTENT_WARNING_NSFW", "CONTENT_WARNING_MIXED", "CONTENT_WARNING_ADULT",
+		"1", "2", "TRUE"
+	)) return ContentType.HENTAI
+	if (v in setOf("MANGA", "SAFE", "CONTENT_WARNING_SAFE", "0", "FALSE")) return ContentType.MANGA
+	val n = v.toIntOrNull()
+	if (n != null) return if (n > 0) ContentType.HENTAI else ContentType.MANGA
+	return fallback
 }
 
-internal fun contentTypeFromManifest(meta: Bundle): ContentType? = when {
-	meta.getInt("tachiyomix.contentWarning", -1) == 0 -> ContentType.MANGA
-	meta.getInt("tachiyomix.contentWarning", -1) > 0 || meta.getInt("tachiyomi.extension.nsfw", 0) == 1 -> ContentType.HENTAI
-	else -> null
+internal fun contentTypeFromManifest(meta: Bundle): ContentType? {
+	val cw = meta.getInt("tachiyomix.contentWarning", -1)
+	if (cw == 0) return ContentType.MANGA
+	if (cw > 0) return ContentType.HENTAI
+	val cwStr = meta.getString("tachiyomix.contentWarning")
+	if (!cwStr.isNullOrBlank()) {
+		val parsed = contentTypeFromCatalog(cwStr, fallback = ContentType.MANGA)
+		if (parsed != ContentType.MANGA || cwStr.equals("0", true) || cwStr.equals("SAFE", true)) return parsed
+	}
+	if (meta.containsKey("tachiyomi.extension.nsfw")) {
+		val raw = meta.get("tachiyomi.extension.nsfw")
+		return contentTypeFromCatalog(raw, fallback = ContentType.MANGA)
+	}
+	return null
 }
