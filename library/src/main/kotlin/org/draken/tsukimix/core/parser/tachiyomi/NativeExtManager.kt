@@ -39,6 +39,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 import kotlin.math.abs
+import androidx.core.graphics.createBitmap
 
 class NativeExtManager(
 	context: Context,
@@ -125,13 +126,14 @@ class NativeExtManager(
 				return@withContext false
 			}
 
+			val iconUrl = artifact.iconUrl?.takeIf { it.isNotBlank() } ?: extractIcon(destination, pkg)
 			val record = DirectTachiyomiInstalled(
 				packageName = pkg,
 				name = artifact.name,
 				repositoryUrl = artifact.repositoryUrl,
 				jarUrl = artifact.jarUrl,
 				apkUrl = artifact.apkUrl,
-				iconUrl = artifact.iconUrl,
+				iconUrl = iconUrl,
 				versionCode = loaded.versionCode,
 				versionName = loaded.versionName,
 				libVersion = loaded.libVersion,
@@ -142,6 +144,79 @@ class NativeExtManager(
 			reload()
 			lastInstallError = null
 			true
+		}
+	}
+
+	suspend fun installLocal(sourceFile: File, originalName: String? = null): Boolean = mutex.withLock {
+		withContext(Dispatchers.IO) {
+			if (!sourceFile.exists() || sourceFile.length() == 0L) {
+				lastInstallError = "Source file does not exist or is empty"
+				return@withContext false
+			}
+			val tempInput = File(directory, "temp_import_${System.currentTimeMillis()}.apk")
+			val staging = File(directory, "temp_staging_${System.currentTimeMillis()}.apk")
+			try {
+				sourceFile.copyTo(tempInput, overwrite = true)
+				if (!prepareDex(tempInput, staging) || !makeReadOnly(staging)) {
+					tempInput.delete(); staging.delete()
+					lastInstallError = "Failed to prepare extension package"
+					return@withContext false
+				}
+				val dummyPkg = "temp.import"
+				val dummyArtifact = TachiyomiExtensionArtifact(
+					repositoryUrl = "local://file",
+					name = originalName?.removeSuffix(".apk")?.removeSuffix(".jar") ?: "Local Extension",
+					packageName = dummyPkg,
+					jarUrl = null,
+					apkUrl = null,
+					iconUrl = null,
+					extensionLib = null,
+					versionCode = null,
+					versionName = null,
+				)
+				val result = loadArtifact(staging, dummyArtifact)
+				if (result !is MangaResult.Success) {
+					tempInput.delete(); staging.delete()
+					lastInstallError = (result as? MangaResult.Error)?.message ?: "Failed to load extension"
+					return@withContext false
+				}
+				val realPkg = result.pkgName
+				val destination = File(directory, "$realPkg.apk")
+				destination.delete()
+				if (!staging.renameTo(destination)) {
+					staging.delete()
+					return@withContext false
+				}
+				val iconUrl = extractIcon(destination, realPkg)
+				val record = DirectTachiyomiInstalled(
+					packageName = realPkg,
+					name = result.appName.ifBlank { originalName?.removeSuffix(".apk")?.removeSuffix(".jar") ?: realPkg },
+					repositoryUrl = "local://$realPkg",
+					jarUrl = null,
+					apkUrl = null,
+					iconUrl = iconUrl,
+					versionCode = result.versionCode,
+					versionName = result.versionName,
+					libVersion = result.libVersion,
+					contentType = if (result.isNsfw) ContentType.HENTAI else ContentType.MANGA,
+					sources = result.catalogueSources.map { s ->
+						org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiCatalogSource(
+							id = s.id,
+							name = s.name,
+							language = s.lang,
+							homeUrl = (s as? eu.kanade.tachiyomi.source.online.HttpSource)?.baseUrl,
+							contentType = if (result.isNsfw) ContentType.HENTAI else ContentType.MANGA,
+						)
+					},
+				)
+				writeRecords(readRecords().filterNot { it.packageName == realPkg } + record)
+				reload()
+				lastInstallError = null
+				true
+			} finally {
+				tempInput.delete()
+				staging.delete()
+			}
 		}
 	}
 
@@ -204,7 +279,7 @@ class NativeExtManager(
 			} else {
 				failures += DirectTachiyomiFailure(
 					record.packageName,
-					(result as? MangaResult.Error)?.message ?: "Load failed"
+					(result as? MangaResult.Error)?.message ?: "Load failed",
 				)
 			}
 		}
@@ -247,9 +322,12 @@ class NativeExtManager(
 			val sources = loadSources(pkg, classNames, loader)
 			if (sources.isEmpty()) error("No sources")
 			classLoaders[pkg] = loader
+			val rawAppName = getArchiveLabel(file, pkgInfo) ?: artifact.name
+			val cleanAppName = rawAppName.removePrefix("Tachiyomi: ").removePrefix("Tachiyomi - ").trim()
+				.ifBlank { sources.firstOrNull()?.name ?: artifact.name }
 			MangaResult.Success(
 				pkgName = pkg,
-				appName = artifact.name,
+				appName = cleanAppName,
 				versionCode = pkgInfo?.let(PackageInfoCompat::getLongVersionCode) ?: artifact.versionCode ?: 0L,
 				versionName = verName,
 				libVersion = libVer,
@@ -259,6 +337,70 @@ class NativeExtManager(
 			)
 		}.getOrElse { MangaResult.Error(pkg, "Source load error: ${it.message}", it) }
 	}
+
+	private fun getArchiveLabel(file: File, pkgInfo: PackageInfo?): String? = runCatching {
+		val appInfo = pkgInfo?.applicationInfo ?: return@runCatching null
+		appInfo.sourceDir = file.absolutePath
+		appInfo.publicSourceDir = file.absolutePath
+		val nonLoc = appInfo.nonLocalizedLabel?.toString()?.trim()
+		if (!nonLoc.isNullOrBlank()) return@runCatching nonLoc
+		if (appInfo.labelRes != 0) {
+			val res = appContext.packageManager.getResourcesForApplication(appInfo)
+			val str = res.getString(appInfo.labelRes).trim()
+			if (str.isNotBlank()) return@runCatching str
+		}
+		appInfo.loadLabel(appContext.packageManager).toString().trim()
+	}.getOrNull()
+
+	private fun extractIcon(file: File, pkg: String): String? = runCatching {
+		val iconDir = File(directory, "icons").also { it.mkdirs() }
+		val destIcon = File(iconDir, "$pkg.png")
+		if (destIcon.exists() && destIcon.length() > 0) return destIcon.toURI().toString()
+
+		val pkgInfo = getPackageInfo(file)
+		val appInfo = pkgInfo?.applicationInfo
+		if (appInfo != null) {
+			appInfo.sourceDir = file.absolutePath
+			appInfo.publicSourceDir = file.absolutePath
+			val iconRes = appInfo.icon.takeIf { it != 0 } ?: 0
+			if (iconRes != 0) {
+				val iconDrawable = runCatching {
+					val res = appContext.packageManager.getResourcesForApplication(appInfo)
+					res.getDrawable(iconRes, null)
+				}.getOrNull()
+				if (iconDrawable != null) {
+					val bitmap = if (iconDrawable is android.graphics.drawable.BitmapDrawable) {
+						iconDrawable.bitmap
+					} else {
+						val w = iconDrawable.intrinsicWidth.takeIf { it > 0 } ?: 96
+						val h = iconDrawable.intrinsicHeight.takeIf { it > 0 } ?: 96
+						val bmp = createBitmap(w, h)
+						val canvas = android.graphics.Canvas(bmp)
+						iconDrawable.setBounds(0, 0, w, h)
+						iconDrawable.draw(canvas)
+						bmp
+					}
+					destIcon.outputStream().use { out ->
+						bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+					}
+					return destIcon.toURI().toString()
+				}
+			}
+		}
+
+		ZipFile(file).use { zip ->
+			val entry = zip.entries().asSequence().firstOrNull {
+				it.name.startsWith("res/") && (it.name.endsWith(".png") || it.name.endsWith(".webp"))
+			} ?: zip.entries().asSequence().firstOrNull { it.name.endsWith(".png") }
+			if (entry != null) {
+				zip.getInputStream(entry).use { input ->
+					destIcon.outputStream().use { output -> input.copyTo(output) }
+				}
+				return destIcon.toURI().toString()
+			}
+		}
+		null
+	}.getOrNull()
 
 	private fun loadSources(pkg: String, names: String, loader: ClassLoader): List<Source> =
 		names.split(';', ':', ',').map { it.trim() }.filter { it.isNotEmpty() }.map { if (it.startsWith('.')) pkg + it else it }.flatMap { cls ->
@@ -350,7 +492,8 @@ class NativeExtManager(
 		val text = metaFile.takeIf { it.exists() }?.readText().orEmpty()
 		val arr = runCatching { JSONArray(text) }.getOrNull() ?: return emptyList()
 		return (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let(
-			DirectTachiyomiInstalled::fromJson) }
+			DirectTachiyomiInstalled::fromJson,
+		) }
 	}
 
 	private fun writeRecords(records: List<DirectTachiyomiInstalled>) {

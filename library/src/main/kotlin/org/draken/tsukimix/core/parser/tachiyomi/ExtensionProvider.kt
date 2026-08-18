@@ -14,7 +14,6 @@ import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiExtensionArtifac
 import org.draken.tsukimix.core.parser.tachiyomi.model.contentTypeFromCatalog
 import org.json.JSONArray
 import org.json.JSONObject
-import tsuki.model.ContentType
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -28,8 +27,8 @@ class ExtensionProvider(
 	private val cacheDir by lazy { File(appContext.filesDir, "tachiyomi-catalog-cache").also { it.mkdirs() } }
 	private val client by lazy {
 		httpClient.newBuilder()
-			.connectTimeout(15, TimeUnit.SECONDS)
-			.readTimeout(30, TimeUnit.SECONDS)
+			.connectTimeout(5, TimeUnit.SECONDS)
+			.readTimeout(8, TimeUnit.SECONDS)
 			.followRedirects(true)
 			.build()
 	}
@@ -39,20 +38,22 @@ class ExtensionProvider(
 		private set
 
 	fun saveRepository(input: String) {
-		val url = normalizeUrl(input) ?: return
-		prefs.edit { putStringSet("repositories", prefs.getStringSet("repositories", emptySet()).orEmpty() + url) }
+		val entry = normalizeUrl(input) ?: input.trim().removeSuffix("/")
+		if (entry.isBlank()) return
+		val current = prefs.getStringSet("repositories", emptySet()).orEmpty()
+		val key = canonicalKey(entry)
+		val filtered = current.filterNot { canonicalKey(it) == key }.toSet()
+		prefs.edit { putStringSet("repositories", filtered + entry) }
 	}
 
 	fun canonicalKey(input: String): String {
+		val pair = parseOwnerRepo(input)
+		if (pair != null) {
+			val owner = pair.first
+			val repo = pair.second.removeSuffix("-source").removeSuffix("-sources")
+			return "$owner/$repo".lowercase()
+		}
 		val raw = input.trim().removeSuffix("/")
-		val gh = GITHUB_REGEX.matchEntire(raw)
-		if (gh != null) return "${gh.groupValues[1]}/${gh.groupValues[2]}".lowercase()
-		val rawGh = RAW_GH_REGEX.matchEntire(raw)
-		if (rawGh != null) return "${rawGh.groupValues[1]}/${rawGh.groupValues[2]}".lowercase()
-		val parts = raw.removePrefix("https://").removePrefix("http://")
-			.removePrefix("raw.githubusercontent.com/").removePrefix("github.com/").removePrefix("www.github.com/")
-			.split('/').filter { it.isNotBlank() }
-		if (parts.size >= 2) return "${parts[0]}/${parts[1]}".lowercase()
 		return normalizeUrl(raw)?.lowercase() ?: raw.lowercase()
 	}
 
@@ -85,16 +86,27 @@ class ExtensionProvider(
 	}
 
 	fun removeRepository(input: String) {
-		val url = normalizeUrl(input) ?: return
+		val raw = input.trim().removeSuffix("/")
+		val url = normalizeUrl(input) ?: raw
 		val key = canonicalKey(input)
+		cacheFile(raw).delete()
 		cacheFile(url).delete()
+		val currentRepos = prefs.getStringSet("repositories", emptySet()).orEmpty()
+		val toRemove = currentRepos.filter {
+			val itRaw = it.trim().removeSuffix("/")
+			itRaw == raw ||
+				(normalizeUrl(it) ?: itRaw) == url ||
+				canonicalKey(it) == key
+		}.toSet()
+		toRemove.forEach { cacheFile(it).delete() }
 		val names = runCatching { JSONObject(prefs.getString("repository_names", "{}").orEmpty()) }.getOrElse { JSONObject() }
 		names.remove(url)
+		names.remove(raw)
 		names.remove(key)
 		val keysToRemove = names.keys().asSequence().filter { canonicalKey(it) == key }.toList()
 		keysToRemove.forEach { names.remove(it) }
 		prefs.edit {
-			putStringSet("repositories", prefs.getStringSet("repositories", emptySet()).orEmpty() - url)
+			putStringSet("repositories", currentRepos - toRemove - raw - url)
 			putString("repository_names", names.toString())
 		}
 	}
@@ -107,23 +119,34 @@ class ExtensionProvider(
 		putStringSet("ignored_packages", prefs.getStringSet("ignored_packages", emptySet()).orEmpty() - pkg)
 	}
 
+	fun getSavedRepositories(): Set<String> {
+		val current = prefs.getStringSet("repositories", emptySet()).orEmpty()
+		val map = mutableMapOf<String, String>()
+		for (repo in current) {
+			val key = canonicalKey(repo)
+			if (!map.containsKey(key)) {
+				map[key] = normalizeUrl(repo) ?: repo
+			}
+		}
+		return map.values.toSet()
+	}
+
 	suspend fun loadSavedCached(): List<TachiyomiExtensionArtifact> = withContext(Dispatchers.IO) {
 		val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
-		prefs.getStringSet("repositories", emptySet()).orEmpty()
+		getSavedRepositories()
 			.flatMap(::readCachedArtifacts)
 			.filterNot { it.packageName in ignored }
 	}
 
 	suspend fun loadSaved(): List<TachiyomiExtensionArtifact> = withContext(Dispatchers.IO) {
 		val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
-		prefs.getStringSet("repositories", emptySet()).orEmpty()
+		getSavedRepositories()
 			.flatMap { url -> load(url).ifEmpty { readCachedArtifacts(url) } }
 			.filterNot { it.packageName in ignored }
 	}
 
 	suspend fun load(input: String): List<TachiyomiExtensionArtifact> = withContext(Dispatchers.IO) {
-		val normalized = normalizeUrl(input)
-		val urls = normalized?.let(::candidateUrls).orEmpty()
+		val urls = candidateUrls(input)
 		if (urls.isEmpty()) {
 			lastLoadError = "Invalid repository URL"
 			return@withContext emptyList()
@@ -136,13 +159,43 @@ class ExtensionProvider(
 			val result = runCatching {
 				client.newCall(request).execute().use { res ->
 					if (!res.isSuccessful) return@use emptyList()
-					val body = decodeBody(url, res.body.string())
-					parse(normalized ?: url, body)
+					val rawBody = res.body.string()
+					val body = decodeBody(url, rawBody)
+					val trimmed = body.removePrefix("\uFEFF").trim()
+					if (trimmed.startsWith("{")) {
+						val obj = runCatching { JSONObject(trimmed) }.getOrNull()
+						val meta = obj?.optJSONObject("meta")
+						val repoName = meta?.optString("name")?.takeIf { it.isNotBlank() }
+						if (repoName != null) {
+							setRepositoryName(input, repoName)
+						}
+						val indexV2 = obj?.optString("index_v2")?.takeIf { it.isNotBlank() }
+						if (indexV2 != null && !indexV2.endsWith(".pb", true)) {
+							val v2Result = load(indexV2)
+							if (v2Result.isNotEmpty() && !isDummyCatalog(v2Result)) return@use v2Result
+						}
+						if (url.endsWith("/repo.json")) {
+							for (compUrl in listOf(url.replace("/repo.json", "/index.json"), url.replace("/repo.json", "/index.min.json"))) {
+								val companionResult = runCatching {
+									val req = Request.Builder().url(compUrl).header("Accept", "application/json").header("User-Agent", "Usagi/1.0").build()
+									client.newCall(req).execute().use { compRes ->
+										if (compRes.isSuccessful) parse(compUrl, decodeBody(compUrl, compRes.body.string())) else emptyList()
+									}
+								}.getOrDefault(emptyList())
+								if (companionResult.isNotEmpty() && !isDummyCatalog(companionResult)) return@use companionResult
+							}
+						}
+					}
+					parse(url, body)
 				}
 			}.getOrDefault(emptyList())
 
-			if (result.isNotEmpty()) {
-				writeCachedArtifacts(normalized ?: url, result)
+			if (result.isNotEmpty() && !isDummyCatalog(result)) {
+				writeCachedArtifacts(input, result)
+				val normalized = normalizeUrl(input)
+				if (normalized != null && normalized != input) {
+					writeCachedArtifacts(normalized, result)
+				}
 				lastLoadError = null
 				return@withContext result
 			}
@@ -150,6 +203,9 @@ class ExtensionProvider(
 		lastLoadError = "Failed to load catalog from $input"
 		emptyList()
 	}
+
+	private fun isDummyCatalog(artifacts: List<TachiyomiExtensionArtifact>): Boolean =
+		artifacts.isNotEmpty() && artifacts.all { it.name.contains("Outdated App", true) || it.name.contains("Update to Mihon", true) }
 
 	private fun cacheFile(url: String): File {
 		val hash = MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) }
@@ -189,8 +245,16 @@ class ExtensionProvider(
 	}
 
 	private fun readCachedArtifacts(input: String): List<TachiyomiExtensionArtifact> {
-		val url = normalizeUrl(input) ?: return emptyList()
-		val file = cacheFile(url).takeIf { it.exists() } ?: return emptyList()
+		val candidates = listOfNotNull(input, normalizeUrl(input)).distinct()
+		for (key in candidates) {
+			val file = cacheFile(key).takeIf { it.exists() } ?: continue
+			val list = parseCachedFile(file, key)
+			if (list.isNotEmpty()) return list
+		}
+		return emptyList()
+	}
+
+	private fun parseCachedFile(file: File, key: String): List<TachiyomiExtensionArtifact> {
 		return runCatching {
 			val root = JSONObject(file.readText())
 			val arr = root.optJSONArray("artifacts") ?: return emptyList()
@@ -215,7 +279,7 @@ class ExtensionProvider(
 					)
 				}
 				TachiyomiExtensionArtifact(
-					root.optString("repositoryUrl", url),
+					root.optString("repositoryUrl", key),
 					obj.optString("name", pkg),
 					pkg,
 					obj.optString("jarUrl").takeIf { it.isNotBlank() },
@@ -231,24 +295,100 @@ class ExtensionProvider(
 		}.getOrDefault(emptyList())
 	}
 
-	fun normalizeUrl(input: String): String? {
+	fun parseOwnerRepo(input: String): Pair<String, String>? {
 		val raw = input.trim().removeSuffix("/")
-		if (raw.isBlank()) return null
-		val gh = GITHUB_REGEX.matchEntire(raw)
-		if (gh != null) return "https://raw.githubusercontent.com/${gh.groupValues[1]}/${gh.groupValues[2]}/main/index.json"
-		if (raw.startsWith("http://") || raw.startsWith("https://")) return raw
-		val parts = raw.removePrefix("github.com/").removePrefix("www.github.com/").split('/').filter { it.isNotBlank() }
-		return if (parts.size == 2) "https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/main/index.json" else null
+		if (raw.startsWith("local:", ignoreCase = true) ||
+			raw.startsWith("file:", ignoreCase = true) ||
+			raw.startsWith("installed:", ignoreCase = true) ||
+			raw.startsWith("content:", ignoreCase = true)
+		) {
+			return null
+		}
+		val gh = GITHUB_REGEX.matchEntire(raw) ?: RAW_GH_REGEX.matchEntire(raw)
+		if (gh != null) {
+			return gh.groupValues[1] to gh.groupValues[2]
+		}
+		val stripped = raw.removePrefix("https://").removePrefix("http://")
+			.removePrefix("raw.githubusercontent.com/").removePrefix("github.com/").removePrefix("www.github.com/")
+			.removePrefix("cdn.jsdelivr.net/gh/")
+		val parts = stripped.split('/').filter { it.isNotBlank() }
+		if (parts.size >= 2 && !parts[0].contains(':')) {
+			val owner = parts[0]
+			val repo = parts[1].substringBefore('@').removeSuffix(".git")
+			return owner to repo
+		}
+		return null
 	}
 
-	private fun candidateUrls(url: String): List<String> {
-		val m = RAW_GH_REGEX.matchEntire(url) ?: return listOf(url)
-		val (owner, repo) = m.groupValues[1] to m.groupValues[2]
-		return listOf(
-			url, "https://cdn.jsdelivr.net/gh/$owner/$repo@main/index.json",
-			"https://raw.githubusercontent.com/$owner/$repo/master/index.json",
-			"https://api.github.com/repos/$owner/$repo/contents/index.json"
-		).distinct()
+	fun normalizeUrl(input: String): String? {
+		val pair = parseOwnerRepo(input)
+		if (pair != null) {
+			val owner = pair.first
+			val repo = pair.second.removeSuffix("-source").removeSuffix("-sources")
+			return "https://raw.githubusercontent.com/$owner/$repo/repo/index.json"
+		}
+		val raw = input.trim().removeSuffix("/")
+		return if (raw.startsWith("http://") || raw.startsWith("https://")) raw else null
+	}
+
+	private fun candidateUrls(input: String): List<String> {
+		val raw = input.trim().removeSuffix("/")
+		val pair = parseOwnerRepo(raw)
+		val owner = pair?.first
+		val repoName = pair?.second
+
+		if (owner != null && repoName != null) {
+			val baseRepo = repoName.removeSuffix("-source").removeSuffix("-sources")
+			val repos = listOf(
+				repoName,
+				baseRepo,
+				if (repoName == baseRepo) "$baseRepo-source" else repoName,
+				if (repoName == baseRepo) "$baseRepo-sources" else repoName,
+			).distinct()
+			val branches = listOf("repo", "main", "master", "gh-pages")
+			val files = listOf("index.json", "index.min.json", "repo.json")
+			val list = mutableListOf<String>()
+			if (raw.startsWith("http://") || raw.startsWith("https://")) {
+				list.add(raw)
+			}
+			for (r in repos) {
+				for (b in branches) {
+					for (f in files) {
+						list.add("https://raw.githubusercontent.com/$owner/$r/$b/$f")
+						list.add("https://cdn.jsdelivr.net/gh/$owner/$r@$b/$f")
+					}
+				}
+				for (f in files) {
+					list.add("https://$owner.github.io/$r/$f")
+				}
+			}
+			return list.distinct()
+		}
+
+		if (raw.startsWith("http://") || raw.startsWith("https://")) {
+			val list = mutableListOf(raw)
+			when {
+				raw.endsWith("/index.json") -> {
+					list.add(raw.replace("/index.json", "/index.min.json"))
+					list.add(raw.replace("/index.json", "/repo.json"))
+				}
+				raw.endsWith("/index.min.json") -> {
+					list.add(raw.replace("/index.min.json", "/index.json"))
+					list.add(raw.replace("/index.min.json", "/repo.json"))
+				}
+				raw.endsWith("/repo.json") -> {
+					list.add(raw.replace("/repo.json", "/index.json"))
+					list.add(raw.replace("/repo.json", "/index.min.json"))
+				}
+				else -> {
+					list.add("$raw/index.json")
+					list.add("$raw/index.min.json")
+					list.add("$raw/repo.json")
+				}
+			}
+			return list.distinct()
+		}
+		return emptyList()
 	}
 
 	private fun decodeBody(url: String, body: String): String {
