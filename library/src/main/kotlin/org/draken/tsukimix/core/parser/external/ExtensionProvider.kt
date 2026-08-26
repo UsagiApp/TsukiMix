@@ -1,6 +1,6 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import android.content.Context
 import android.util.Base64
@@ -9,9 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiCatalogSource
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiExtensionArtifact
-import org.draken.tsukimix.core.parser.tachiyomi.model.contentTypeFromCatalog
+import org.draken.tsukimix.core.parser.external.model.ExtSource
+import org.draken.tsukimix.core.parser.external.model.ExtArtifact
+import org.draken.tsukimix.core.parser.external.model.contentTypeFromCatalog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -65,7 +65,9 @@ class ExtensionProvider(
 		return names.optString(key).takeIf { it.isNotBlank() }
 			?: names.optString(url).takeIf { it.isNotBlank() }
 			?: names.optString(raw).takeIf { it.isNotBlank() }
-			?: names.keys().asSequence().firstOrNull { canonicalKey(it) == key }?.let { names.optString(it).takeIf { s -> s.isNotBlank() } }
+			?: names.keys().asSequence().firstOrNull { canonicalKey(it) == key }?.let {
+				names.optString(it).takeIf { s -> s.isNotBlank() }
+			}
 	}
 
 	fun setRepositoryName(input: String, name: String?) {
@@ -131,21 +133,21 @@ class ExtensionProvider(
 		return map.values.toSet()
 	}
 
-	suspend fun loadSavedCached(): List<TachiyomiExtensionArtifact> = withContext(Dispatchers.IO) {
+	suspend fun loadSavedCached(): List<ExtArtifact> = withContext(Dispatchers.IO) {
 		val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
 		getSavedRepositories()
 			.flatMap(::readCachedArtifacts)
 			.filterNot { it.packageName in ignored }
 	}
 
-	suspend fun loadSaved(): List<TachiyomiExtensionArtifact> = withContext(Dispatchers.IO) {
+	suspend fun loadSaved(): List<ExtArtifact> = withContext(Dispatchers.IO) {
 		val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
 		getSavedRepositories()
 			.flatMap { url -> load(url).ifEmpty { readCachedArtifacts(url) } }
 			.filterNot { it.packageName in ignored }
 	}
 
-	suspend fun load(input: String): List<TachiyomiExtensionArtifact> = withContext(Dispatchers.IO) {
+	suspend fun load(input: String): List<ExtArtifact> = withContext(Dispatchers.IO) {
 		val urls = candidateUrls(input)
 		if (urls.isEmpty()) {
 			lastLoadError = "Invalid repository URL"
@@ -175,9 +177,15 @@ class ExtensionProvider(
 							if (v2Result.isNotEmpty() && !isDummyCatalog(v2Result)) return@use v2Result
 						}
 						if (url.endsWith("/repo.json")) {
-							for (compUrl in listOf(url.replace("/repo.json", "/index.json"), url.replace("/repo.json", "/index.min.json"))) {
+							for (compUrl in listOf(
+								url.replace("/repo.json", "/index.json"),
+								url.replace("/repo.json", "/index.min.json")
+							)) {
 								val companionResult = runCatching {
-									val req = Request.Builder().url(compUrl).header("Accept", "application/json").header("User-Agent", "Usagi/1.0").build()
+									val req = Request.Builder().url(compUrl)
+										.header("Accept", "application/json")
+										.header("User-Agent", "Usagi/1.0")
+										.build()
 									client.newCall(req).execute().use { compRes ->
 										if (compRes.isSuccessful) parse(compUrl, decodeBody(compUrl, compRes.body.string())) else emptyList()
 									}
@@ -204,7 +212,7 @@ class ExtensionProvider(
 		emptyList()
 	}
 
-	private fun isDummyCatalog(artifacts: List<TachiyomiExtensionArtifact>): Boolean =
+	private fun isDummyCatalog(artifacts: List<ExtArtifact>): Boolean =
 		artifacts.isNotEmpty() && artifacts.all { it.name.contains("Outdated App", true) || it.name.contains("Update to Mihon", true) }
 
 	private fun cacheFile(url: String): File {
@@ -212,7 +220,7 @@ class ExtensionProvider(
 		return File(cacheDir, "$hash.json")
 	}
 
-	private fun writeCachedArtifacts(url: String, artifacts: List<TachiyomiExtensionArtifact>) = runCatching {
+	private fun writeCachedArtifacts(url: String, artifacts: List<ExtArtifact>) = runCatching {
 		val array = JSONArray(artifacts.map { art ->
 			JSONObject().apply {
 				put("name", art.name)
@@ -244,7 +252,7 @@ class ExtensionProvider(
 		cacheFile(url).writeText(JSONObject().put("repositoryUrl", url).put("artifacts", array).toString())
 	}
 
-	private fun readCachedArtifacts(input: String): List<TachiyomiExtensionArtifact> {
+	private fun readCachedArtifacts(input: String): List<ExtArtifact> {
 		val candidates = listOfNotNull(input, normalizeUrl(input)).distinct()
 		for (key in candidates) {
 			val file = cacheFile(key).takeIf { it.exists() } ?: continue
@@ -254,31 +262,35 @@ class ExtensionProvider(
 		return emptyList()
 	}
 
-	private fun parseCachedFile(file: File, key: String): List<TachiyomiExtensionArtifact> {
+	private fun parseCachedFile(file: File, key: String): List<ExtArtifact> {
 		return runCatching {
 			val root = JSONObject(file.readText())
 			val arr = root.optJSONArray("artifacts") ?: return emptyList()
 			(0 until arr.length()).mapNotNull { i ->
 				val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-				val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+				val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() }
+					?: return@mapNotNull null
 				val lib = obj.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
-				val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating") ?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
+				val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating")
+					?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
 				val type = contentTypeFromCatalog(rawNsfw, lib)
 				val srcArr = obj.optJSONArray("sources")
 				val sources = (0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
 					val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
 					val id = s.optLong("id").takeIf { it != 0L } ?: return@mapNotNull null
-					val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
+					val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType")
+						?: s.opt("isNsfw") ?: s.opt("nsfw")
 					val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
-					TachiyomiCatalogSource(
+					ExtSource(
 						id,
 						s.optString("name", pkg),
 						s.optString("language", "all").ifBlank { s.optString("lang", "all") },
-						s.optString("homeUrl").takeIf { it.isNotBlank() } ?: s.optString("baseUrl").takeIf { it.isNotBlank() },
+						s.optString("homeUrl").takeIf { it.isNotBlank() }
+							?: s.optString("baseUrl").takeIf { it.isNotBlank() },
 						sType,
 					)
 				}
-				TachiyomiExtensionArtifact(
+				ExtArtifact(
 					root.optString("repositoryUrl", key),
 					obj.optString("name", pkg),
 					pkg,
@@ -287,7 +299,8 @@ class ExtensionProvider(
 					obj.optString("iconUrl").takeIf { it.isNotBlank() },
 					lib,
 					obj.optString("versionCode").toLongOrNull() ?: obj.optLong("code", -1L).takeIf { it != -1L },
-					obj.optString("versionName").takeIf { it.isNotBlank() } ?: obj.optString("version").takeIf { it.isNotBlank() },
+					obj.optString("versionName").takeIf { it.isNotBlank() }
+						?: obj.optString("version").takeIf { it.isNotBlank() },
 					type,
 					sources,
 				)
@@ -397,7 +410,7 @@ class ExtensionProvider(
 		return if (!content.isNullOrBlank()) Base64.decode(content, Base64.DEFAULT).toString(Charsets.UTF_8) else body
 	}
 
-	private fun parse(repoUrl: String, body: String): List<TachiyomiExtensionArtifact> = runCatching {
+	private fun parse(repoUrl: String, body: String): List<ExtArtifact> = runCatching {
 		val trimmed = body.removePrefix("\uFEFF").trim()
 		val arr = when {
 			trimmed.startsWith("[") -> JSONArray(trimmed)
@@ -412,13 +425,15 @@ class ExtensionProvider(
 		val baseRepoUrl = repoUrl.substringBeforeLast('/')
 		(0 until arr.length()).mapNotNull { i ->
 			val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-			val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+			val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() }
+				?: return@mapNotNull null
 			val res = obj.optJSONObject("resources")
 			val name = obj.optString("name", pkg)
 			val lib = obj.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
 				?: obj.optDouble("libVersion", Double.NaN).takeUnless { it.isNaN() }
 
-			val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating") ?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
+			val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating")
+				?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
 			val type = contentTypeFromCatalog(rawNsfw, lib)
 
 			val apkRaw = obj.optString("apk").ifBlank { obj.optString("apkUrl") }.ifBlank { res?.optString("apkUrl").orEmpty() }
@@ -447,9 +462,10 @@ class ExtensionProvider(
 			val sources = (0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
 				val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
 				val id = s.optLong("id", 0L).takeIf { it != 0L } ?: s.optString("id").toLongOrNull() ?: return@mapNotNull null
-				val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
+				val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating")
+					?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
 				val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
-				TachiyomiCatalogSource(
+				ExtSource(
 					id = id,
 					name = s.optString("name", name),
 					language = s.optString("lang").ifBlank { s.optString("language", "all") },
@@ -457,7 +473,7 @@ class ExtensionProvider(
 					contentType = sType,
 				)
 			}
-			TachiyomiExtensionArtifact(
+			ExtArtifact(
 				repositoryUrl = repoUrl,
 				name = name,
 				packageName = pkg,

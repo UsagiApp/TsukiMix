@@ -1,10 +1,10 @@
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import android.content.Context
 import androidx.core.content.edit
 import androidx.core.os.ConfigurationCompat
 import androidx.preference.PreferenceManager
-import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
+import org.draken.tsukimix.core.parser.external.model.Manga
 import java.util.Locale
 
 internal class ExtensionLangResolver(context: Context) {

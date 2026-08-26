@@ -1,6 +1,6 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi.model
+package org.draken.tsukimix.core.parser.external.model
 
 import eu.kanade.tachiyomi.source.CatalogueSource
 import eu.kanade.tachiyomi.source.Source

@@ -1,4 +1,6 @@
-package org.draken.tsukimix.core.parser.tachiyomi.util
+@file:Suppress("unused", "DEPRECATION")
+
+package org.draken.tsukimix.core.parser.external.util
 
 import java.text.Collator
 import java.util.Locale

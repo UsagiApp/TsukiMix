@@ -1,6 +1,6 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import android.app.Application
 import android.content.Context
@@ -18,8 +18,8 @@ import nl.adaptivity.xmlutil.core.XmlVersion
 import nl.adaptivity.xmlutil.serialization.XML
 import okhttp3.CookieJar
 import okhttp3.OkHttpClient
-import org.draken.tsukimix.core.parser.tachiyomi.preference.AndroidPreferenceStore
-import org.draken.tsukimix.core.parser.tachiyomi.preference.PreferenceStore
+import org.draken.tsukimix.core.parser.external.preference.AndroidPreferenceStore
+import org.draken.tsukimix.core.parser.external.preference.PreferenceStore
 import tsuki.network.UserAgents
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.InjektModule

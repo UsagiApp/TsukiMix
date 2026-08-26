@@ -1,10 +1,10 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
-import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
+import org.draken.tsukimix.core.parser.external.model.Manga
 
 class ExtensionLangPref {
 	fun ExtensionManager.addLangToPref(

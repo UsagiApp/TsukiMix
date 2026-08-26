@@ -1,4 +1,4 @@
-package org.draken.tsukimix.core.parser.tachiyomi.chapter
+package org.draken.tsukimix.core.parser.external.chapter
 
 /**
  * Verbatim port of Mihon's ResolveTitle (mihon/domain/.../ResolveTitle.kt). Used by the

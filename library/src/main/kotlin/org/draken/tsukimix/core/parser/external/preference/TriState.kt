@@ -1,4 +1,4 @@
-package org.draken.tsukimix.core.parser.tachiyomi.preference
+package org.draken.tsukimix.core.parser.external.preference
 
 enum class TriState {
 	DISABLED,

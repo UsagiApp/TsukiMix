@@ -1,4 +1,4 @@
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import android.content.Context
 import eu.kanade.tachiyomi.network.AndroidCookieJar

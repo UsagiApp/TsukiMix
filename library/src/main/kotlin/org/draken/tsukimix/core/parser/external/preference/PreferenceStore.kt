@@ -1,4 +1,6 @@
-package org.draken.tsukimix.core.parser.tachiyomi.preference
+@file:Suppress("unused", "DEPRECATION")
+
+package org.draken.tsukimix.core.parser.external.preference
 
 interface PreferenceStore {
 	fun getString(key: String, defaultValue: String = ""): Preference<String>

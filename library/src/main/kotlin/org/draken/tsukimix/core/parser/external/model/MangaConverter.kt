@@ -1,12 +1,13 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi.model
+package org.draken.tsukimix.core.parser.external.model
 
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
-import org.draken.tsukimix.core.parser.tachiyomi.chapter.ResolveTitle
+import org.draken.tsukimix.core.parser.external.chapter.ResolveTitle
+import org.draken.tsukimix.core.parser.external.model.Manga as ExternalManga
 import tsuki.model.ContentRating
 import tsuki.model.Manga
 import tsuki.model.MangaChapter
@@ -18,7 +19,7 @@ import java.util.Locale
 import java.util.zip.CRC32
 
 fun SManga.toManga(
-	source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga,
+	source: ExternalManga,
 	fallbackUrl: String? = null,
 	fallbackTitle: String? = null,
 ): Manga {
@@ -62,7 +63,7 @@ fun Manga.toSManga(): SManga = SManga.create().also {
 	it.initialized = true
 }
 
-fun branchNameFor(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga, scanlator: String? = null): String? {
+fun branchNameFor(source: ExternalManga, scanlator: String? = null): String? {
 	val lang =
 		if (source.locale.isBlank() || source.locale.equals("all", ignoreCase = true)) {
 			null
@@ -81,7 +82,7 @@ fun branchNameFor(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga,
 	}
 }
 
-fun SChapter.toMangaChapter(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga, mangaTitle: String, fallbackIndex: Int = 0): MangaChapter {
+fun SChapter.toMangaChapter(source: ExternalManga, mangaTitle: String, fallbackIndex: Int = 0): MangaChapter {
 	val safeUrl = runCatching { url }.getOrNull()?.takeIf { it.isNotBlank() }
 		?: "$mangaTitle#$fallbackIndex"
 	val safeName = runCatching { name }.getOrNull().orEmpty()
@@ -110,7 +111,7 @@ fun MangaChapter.toSChapter(): SChapter = SChapter.create().also {
 	it.date_upload = uploadDate
 }
 
-fun Page.toMangaPage(source: org.draken.tsukimix.core.parser.tachiyomi.model.Manga, resolvedUrl: String): MangaPage = MangaPage(
+fun Page.toMangaPage(source: ExternalManga, resolvedUrl: String): MangaPage = MangaPage(
 	id = stableId(source.name, "$index:$resolvedUrl"),
 	url = resolvedUrl,
 	preview = null,

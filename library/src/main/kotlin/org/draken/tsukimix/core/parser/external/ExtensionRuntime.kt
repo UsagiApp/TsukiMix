@@ -1,6 +1,6 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
+import org.draken.tsukimix.core.parser.external.model.Manga
 import java.util.Locale
 
 fun interface TachiyomiDisabledSourceProvider {
@@ -19,7 +19,7 @@ fun interface TachiyomiSourcesPublisher {
 	fun publish(sources: List<Manga>)
 }
 
-class TachiyomiRuntime(
+class ExtRuntime(
 	private val installedManager: ExtensionManager,
 	private val directManager: NativeExtManager,
 	private val disabledSourceProvider: TachiyomiDisabledSourceProvider = TachiyomiDisabledSourceProvider { emptySet() },

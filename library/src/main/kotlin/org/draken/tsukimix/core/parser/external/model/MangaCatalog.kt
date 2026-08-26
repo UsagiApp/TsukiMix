@@ -1,13 +1,13 @@
-@file:Suppress("unused")
+@file:Suppress("unused", "DEPRECATION")
 
-package org.draken.tsukimix.core.parser.tachiyomi.model
+package org.draken.tsukimix.core.parser.external.model
 
 import android.os.Bundle
 import org.json.JSONArray
 import org.json.JSONObject
 import tsuki.model.ContentType
 
-data class TachiyomiCatalogSource(
+data class ExtSource(
 	val id: Long,
 	val name: String,
 	val language: String,
@@ -17,7 +17,7 @@ data class TachiyomiCatalogSource(
 	val isNsfw: Boolean get() = contentType == ContentType.HENTAI
 }
 
-data class TachiyomiExtensionArtifact(
+data class ExtArtifact(
 	val repositoryUrl: String,
 	val name: String,
 	val packageName: String,
@@ -28,12 +28,12 @@ data class TachiyomiExtensionArtifact(
 	val versionCode: Long?,
 	val versionName: String?,
 	val contentType: ContentType = ContentType.MANGA,
-	val sources: List<TachiyomiCatalogSource> = emptyList(),
+	val sources: List<ExtSource> = emptyList(),
 ) {
 	val isNsfw: Boolean get() = contentType == ContentType.HENTAI
 }
 
-data class DirectTachiyomiInstalled(
+data class ExtInstalled(
 	val packageName: String,
 	val name: String,
 	val repositoryUrl: String,
@@ -44,11 +44,14 @@ data class DirectTachiyomiInstalled(
 	val versionName: String,
 	val libVersion: Double,
 	val contentType: ContentType,
-	val sources: List<TachiyomiCatalogSource> = emptyList(),
+	val sources: List<ExtSource> = emptyList(),
 ) {
 	val isNsfw: Boolean get() = contentType == ContentType.HENTAI
 
-	fun toArtifact() = TachiyomiExtensionArtifact(repositoryUrl, name, packageName, jarUrl, apkUrl, iconUrl, libVersion, versionCode, versionName, contentType, sources)
+	fun toArtifact() = ExtArtifact(
+		repositoryUrl, name, packageName, jarUrl, apkUrl, iconUrl,
+		libVersion, versionCode, versionName, contentType, sources,
+	)
 
 	fun toJson() = JSONObject().apply {
 		put("packageName", packageName)
@@ -79,7 +82,7 @@ data class DirectTachiyomiInstalled(
 	}
 
 	companion object {
-		fun fromJson(obj: JSONObject): DirectTachiyomiInstalled? = runCatching {
+		fun fromJson(obj: JSONObject): ExtInstalled? = runCatching {
 			val pkg = obj.optString("packageName").takeIf { it.isNotBlank() } ?: return null
 			val libVer = obj.optDouble("libVersion", 1.4)
 			val rawType = obj.opt("contentWarning") ?: obj.opt("contentRating") ?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
@@ -90,14 +93,19 @@ data class DirectTachiyomiInstalled(
 				val id = s.optLong("id").takeIf { it != 0L } ?: return@mapNotNull null
 				val sRaw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
 				val sType = if (sRaw != null) contentTypeFromCatalog(sRaw, libVer, type) else type
-				TachiyomiCatalogSource(id, s.optString("name", pkg), s.optString("language", "all"), s.optString("homeUrl").takeIf { it.isNotBlank() }, sType)
+				ExtSource(id, s.optString("name", pkg), s.optString("language", "all"), s.optString("homeUrl").takeIf { it.isNotBlank() }, sType)
 			}
-			DirectTachiyomiInstalled(pkg, obj.optString("name", pkg), obj.optString("repositoryUrl"), obj.optString("jarUrl").takeIf { it.isNotBlank() }, obj.optString("apkUrl").takeIf { it.isNotBlank() }, obj.optString("iconUrl").takeIf { it.isNotBlank() }, obj.optLong("versionCode"), obj.optString("versionName", "0.0.0"), libVer, type, srcList)
+			ExtInstalled(
+				pkg, obj.optString("name", pkg), obj.optString("repositoryUrl"),
+				obj.optString("jarUrl").takeIf { it.isNotBlank() }, obj.optString("apkUrl").takeIf { it.isNotBlank() },
+				obj.optString("iconUrl").takeIf { it.isNotBlank() }, obj.optLong("versionCode"),
+				obj.optString("versionName", "0.0.0"), libVer, type, srcList,
+			)
 		}.getOrNull()
 	}
 }
 
-data class DirectTachiyomiFailure(
+data class ExtFailure(
 	val packageName: String,
 	val message: String,
 )

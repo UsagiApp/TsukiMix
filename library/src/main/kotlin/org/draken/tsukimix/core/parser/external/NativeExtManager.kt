@@ -1,15 +1,12 @@
-@file:Suppress("unused")
+@file:Suppress("unused", "DEPRECATION")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.core.content.pm.PackageInfoCompat
-import dalvik.system.DexClassLoader
 import eu.kanade.tachiyomi.source.CatalogueSource
 import eu.kanade.tachiyomi.source.Source
 import eu.kanade.tachiyomi.source.SourceFactory
@@ -21,23 +18,19 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.draken.tsukimix.core.parser.tachiyomi.model.DirectTachiyomiFailure
-import org.draken.tsukimix.core.parser.tachiyomi.model.DirectTachiyomiInstalled
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiExtensionArtifact
-import org.draken.tsukimix.core.parser.tachiyomi.model.MangaResult
-import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
-import org.draken.tsukimix.core.parser.tachiyomi.model.contentTypeFromManifest
+import org.draken.tsukimix.core.parser.external.model.ExtFailure
+import org.draken.tsukimix.core.parser.external.model.ExtInstalled
+import org.draken.tsukimix.core.parser.external.model.ExtArtifact
+import org.draken.tsukimix.core.parser.external.model.MangaResult
+import org.draken.tsukimix.core.parser.external.model.Manga
+import org.draken.tsukimix.core.parser.external.model.contentTypeFromManifest
 import org.json.JSONArray
 import tsuki.model.ContentType
 import java.io.File
 import java.lang.ref.WeakReference
-import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import java.util.zip.Adler32
-import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
-import java.util.zip.ZipOutputStream
 import kotlin.math.abs
 import androidx.core.graphics.createBitmap
 
@@ -66,13 +59,13 @@ class NativeExtManager(
 	private val metaFile = File(directory, "installed.json")
 
 	private val _sources = MutableStateFlow<List<Manga>>(emptyList())
-	private val _installed = MutableStateFlow<List<DirectTachiyomiInstalled>>(emptyList())
-	private val _failed = MutableStateFlow<List<DirectTachiyomiFailure>>(emptyList())
+	private val _installed = MutableStateFlow<List<ExtInstalled>>(emptyList())
+	private val _failed = MutableStateFlow<List<ExtFailure>>(emptyList())
 	private var ready = false
 
 	val sources: StateFlow<List<Manga>> = _sources
-	val installed: StateFlow<List<DirectTachiyomiInstalled>> = _installed
-	val failed: StateFlow<List<DirectTachiyomiFailure>> = _failed
+	val installed: StateFlow<List<ExtInstalled>> = _installed
+	val failed: StateFlow<List<ExtFailure>> = _failed
 
 	@Volatile
 	var lastInstallError: String? = null
@@ -91,7 +84,7 @@ class NativeExtManager(
 		}
 	}
 
-	suspend fun install(artifact: TachiyomiExtensionArtifact): Boolean = mutex.withLock {
+	suspend fun install(artifact: ExtArtifact): Boolean = mutex.withLock {
 		withContext(Dispatchers.IO) {
 			val pkg = artifact.packageName.trim().takeIf { PACKAGE_REGEX.matches(it) } ?: return@withContext false
 			val staging = File(directory, "$pkg.staging.apk")
@@ -127,7 +120,7 @@ class NativeExtManager(
 			}
 
 			val iconUrl = artifact.iconUrl?.takeIf { it.isNotBlank() } ?: extractIcon(destination, pkg)
-			val record = DirectTachiyomiInstalled(
+			val record = ExtInstalled(
 				packageName = pkg,
 				name = artifact.name,
 				repositoryUrl = artifact.repositoryUrl,
@@ -163,7 +156,7 @@ class NativeExtManager(
 					return@withContext false
 				}
 				val dummyPkg = "temp.import"
-				val dummyArtifact = TachiyomiExtensionArtifact(
+				val dummyArtifact = ExtArtifact(
 					repositoryUrl = "local://file",
 					name = originalName?.removeSuffix(".apk")?.removeSuffix(".jar") ?: "Local Extension",
 					packageName = dummyPkg,
@@ -188,7 +181,7 @@ class NativeExtManager(
 					return@withContext false
 				}
 				val iconUrl = extractIcon(destination, realPkg)
-				val record = DirectTachiyomiInstalled(
+				val record = ExtInstalled(
 					packageName = realPkg,
 					name = result.appName.ifBlank { originalName?.removeSuffix(".apk")?.removeSuffix(".jar") ?: realPkg },
 					repositoryUrl = "local://$realPkg",
@@ -200,7 +193,7 @@ class NativeExtManager(
 					libVersion = result.libVersion,
 					contentType = if (result.isNsfw) ContentType.HENTAI else ContentType.MANGA,
 					sources = result.catalogueSources.map { s ->
-						org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiCatalogSource(
+						org.draken.tsukimix.core.parser.external.model.ExtSource(
 							id = s.id,
 							name = s.name,
 							language = s.lang,
@@ -244,15 +237,15 @@ class NativeExtManager(
 	private fun reload() {
 		injektBridge.initialize()
 		val records = readRecords()
-		val successful = ArrayList<DirectTachiyomiInstalled>(records.size)
-		val failures = ArrayList<DirectTachiyomiFailure>()
+		val successful = ArrayList<ExtInstalled>(records.size)
+		val failures = ArrayList<ExtFailure>()
 		val loadedSources = ArrayList<Manga>()
 		sourceByName.clear(); sourceById.clear(); classLoaders.clear()
 
 		for (record in records) {
 			val file = File(directory, "${record.packageName}.apk")
 			if (!file.exists() || !makeReadOnly(file)) {
-				failures += DirectTachiyomiFailure(record.packageName, "Artifact unavailable")
+				failures += ExtFailure(record.packageName, "Artifact unavailable")
 				continue
 			}
 			val result = loadArtifact(file, record.toArtifact())
@@ -277,7 +270,7 @@ class NativeExtManager(
 					sourceByName[wrapped.name] = wrapped
 				}
 			} else {
-				failures += DirectTachiyomiFailure(
+				failures += ExtFailure(
 					record.packageName,
 					(result as? MangaResult.Error)?.message ?: "Load failed",
 				)
@@ -296,7 +289,7 @@ class NativeExtManager(
 		_failed.value = failures
 	}
 
-	private fun loadArtifact(file: File, artifact: TachiyomiExtensionArtifact): MangaResult {
+	private fun loadArtifact(file: File, artifact: ExtArtifact): MangaResult {
 		val pkgInfo = getPackageInfo(file)
 		val pkg = pkgInfo?.packageName?.takeIf { PACKAGE_REGEX.matches(it) } ?: artifact.packageName
 		val meta = pkgInfo?.applicationInfo?.metaData ?: Bundle().apply {
@@ -426,77 +419,16 @@ class NativeExtManager(
 		}
 	}.getOrDefault(false)
 
-	@SuppressLint("SetWorldWritable")
-	private fun prepareDex(input: File, output: File): Boolean = runCatching {
-		output.setWritable(true, false); output.delete()
-		ZipFile(input).use { zip ->
-			val hasManifest = zip.getEntry("AndroidManifest.xml") != null
-			val hasDex = zip.entries().asSequence().any { it.name.matches(DEX_REGEX) }
-			if (hasManifest && hasDex) {
-				input.copyTo(output, overwrite = true)
-				return@use normalizeLegacyDex(output)
-			}
-			val nested = zip.entries().asSequence().firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
-			if (nested != null) {
-				zip.getInputStream(nested).use { s -> output.outputStream().use { t -> s.copyTo(t) } }
-				return@use ZipFile(output).use { it.getEntry("AndroidManifest.xml") != null && it.entries().asSequence().any { e -> e.name.matches(DEX_REGEX) } } && normalizeLegacyDex(output)
-			}
-			false
-		}
-	}.getOrDefault(false)
 
-	private fun normalizeLegacyDex(file: File): Boolean {
-		if (Build.VERSION.SDK_INT >= 26) return true
-		val tmp = File(file.parentFile, "${file.name}.tmp")
-		return runCatching {
-			ZipFile(file).use { zip ->
-				ZipOutputStream(tmp.outputStream().buffered()).use { out ->
-					val buf = ByteArray(8192)
-					zip.entries().asSequence().forEach { entry ->
-						out.putNextEntry(ZipEntry(entry.name).apply { time = entry.time })
-						if (entry.name.matches(DEX_REGEX)) {
-							out.write(downgradeDex035(zip.getInputStream(entry).use { it.readBytes() }))
-						} else {
-							zip.getInputStream(entry).use { input ->
-								var r: Int
-								while (input.read(buf).also { r = it } >= 0) out.write(buf, 0, r)
-							}
-						}
-						out.closeEntry()
-					}
-				}
-			}
-			tmp.renameTo(file)
-		}.getOrElse { tmp.delete(); false }
-	}
-
-	private fun downgradeDex035(bytes: ByteArray): ByteArray {
-		if (bytes.size < 32 || !bytes.copyOfRange(0, 4).contentEquals(DEX_MAGIC)) return bytes
-		if (bytes[4] != '0'.code.toByte() || bytes[5] != '3'.code.toByte() || bytes[6] != '8'.code.toByte()) return bytes
-		bytes[6] = '5'.code.toByte()
-		MessageDigest.getInstance("SHA-1").digest(bytes.copyOfRange(32, bytes.size)).copyInto(bytes, 12)
-		val cs = Adler32().apply { update(bytes, 12, bytes.size - 12) }.value
-		for (i in 0 until 4) bytes[8 + i] = (cs ushr (i * 8)).toByte()
-		return bytes
-	}
-
-	@SuppressLint("SetWorldReadable")
-	private fun makeReadOnly(file: File): Boolean {
-		if (!file.exists() || !file.isFile) return false
-		file.setReadable(true, false)
-		file.setWritable(false, false)
-		return !file.canWrite()
-	}
-
-	private fun readRecords(): List<DirectTachiyomiInstalled> {
+	private fun readRecords(): List<ExtInstalled> {
 		val text = metaFile.takeIf { it.exists() }?.readText().orEmpty()
 		val arr = runCatching { JSONArray(text) }.getOrNull() ?: return emptyList()
 		return (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let(
-			DirectTachiyomiInstalled::fromJson,
+			ExtInstalled::fromJson,
 		) }
 	}
 
-	private fun writeRecords(records: List<DirectTachiyomiInstalled>) {
+	private fun writeRecords(records: List<ExtInstalled>) {
 		val arr = JSONArray(records.distinctBy { it.packageName }.map { it.toJson() })
 		metaFile.writeText(arr.toString())
 	}
@@ -516,26 +448,11 @@ class NativeExtManager(
 	}
 
 	companion object {
-		private val DEX_MAGIC = byteArrayOf('d'.code.toByte(), 'e'.code.toByte(), 'x'.code.toByte(), '\n'.code.toByte())
-		private val DEX_REGEX = Regex("classes(\\d*)?\\.dex")
 		private val PACKAGE_REGEX = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
 
 		@Volatile
 		private var activeInstance = WeakReference<NativeExtManager>(null)
 
 		fun getByName(name: String): Manga? = activeInstance.get()?.getSourceByName(name)
-	}
-}
-
-private class DirectDexClassLoader(dexPath: String, optDir: String, libPath: String?, parent: ClassLoader) :
-	DexClassLoader(dexPath, optDir, libPath, parent) {
-	private val sys = getSystemClassLoader()
-
-	override fun loadClass(name: String, resolve: Boolean): Class<*> {
-		val cls = findLoadedClass(name)
-			?: runCatching { sys?.loadClass(name) }.getOrNull()
-			?: runCatching { findClass(name) }.getOrElse { super.loadClass(name, false) }
-		if (resolve) resolveClass(cls)
-		return cls
 	}
 }

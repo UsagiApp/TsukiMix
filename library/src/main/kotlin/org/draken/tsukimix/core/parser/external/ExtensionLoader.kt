@@ -1,6 +1,6 @@
-@file:Suppress("unused", "QueryPermissionsNeeded")
+@file:Suppress("unused", "QueryPermissionsNeeded", "DEPRECATION")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import android.content.Context
 import android.content.pm.PackageInfo
@@ -15,8 +15,9 @@ import eu.kanade.tachiyomi.util.lang.Hash
 import eu.kanade.tachiyomi.util.system.ChildFirstPathClassLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.draken.tsukimix.core.parser.tachiyomi.model.TachiyomiExtensionInfo
-import org.draken.tsukimix.core.parser.tachiyomi.model.MangaResult
+import org.draken.tsukimix.core.parser.external.model.TachiyomiExtensionInfo
+import org.draken.tsukimix.core.parser.external.model.MangaResult
+import org.draken.tsukimix.core.parser.external.model.contentTypeFromCatalog
 
 class ExtensionLoader(
 	private val injektBridge: () -> ExtensionBridge,
@@ -169,10 +170,10 @@ class ExtensionLoader(
 	private fun readNsfwFlag(metaData: Bundle): Boolean {
 		if (metaData.getInt(METADATA_CONTENT_WARNING, 0) > 0) return true
 		val cwStr = metaData.getString(METADATA_CONTENT_WARNING)
-		if (!cwStr.isNullOrBlank() && org.draken.tsukimix.core.parser.tachiyomi.model.contentTypeFromCatalog(cwStr) == tsuki.model.ContentType.HENTAI) return true
+		if (!cwStr.isNullOrBlank() && contentTypeFromCatalog(cwStr) == tsuki.model.ContentType.HENTAI) return true
 		if (!metaData.containsKey(METADATA_NSFW)) return false
 		val raw = metaData.get(METADATA_NSFW)
-		return org.draken.tsukimix.core.parser.tachiyomi.model.contentTypeFromCatalog(raw) == tsuki.model.ContentType.HENTAI
+		return contentTypeFromCatalog(raw) == tsuki.model.ContentType.HENTAI
 	}
 
 	private fun extractLanguage(packageName: String): String {

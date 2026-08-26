@@ -1,4 +1,6 @@
-package org.draken.tsukimix.core.parser.tachiyomi.util
+@file:Suppress("unused")
+
+package org.draken.tsukimix.core.parser.external.util
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart

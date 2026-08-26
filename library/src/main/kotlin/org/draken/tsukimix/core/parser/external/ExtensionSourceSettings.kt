@@ -1,6 +1,6 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -12,7 +12,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.Response
-import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
+import org.draken.tsukimix.core.parser.external.model.Manga
 import java.util.concurrent.ConcurrentHashMap
 
 object ExtensionSourceSettings {

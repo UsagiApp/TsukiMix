@@ -1,6 +1,6 @@
 @file:Suppress("unused")
 
-package org.draken.tsukimix.core.parser.tachiyomi
+package org.draken.tsukimix.core.parser.external
 
 import android.content.Context
 import eu.kanade.tachiyomi.source.CatalogueSource
@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.draken.tsukimix.core.parser.tachiyomi.model.MangaResult
-import org.draken.tsukimix.core.parser.tachiyomi.model.Manga
+import org.draken.tsukimix.core.parser.external.model.MangaResult
+import org.draken.tsukimix.core.parser.external.model.Manga
 import java.lang.ref.WeakReference
 import tsuki.model.ContentType
 
