@@ -15,27 +15,12 @@ class ChildFirstPathClassLoader(
 	private val systemClassLoader: ClassLoader? = getSystemClassLoader()
 
 	override fun loadClass(name: String, resolve: Boolean): Class<*> {
-		var loadedClass = findLoadedClass(name)
-
-		val systemLoader = systemClassLoader
-		if (loadedClass == null && systemLoader != null) {
-			loadedClass = runCatching {
-				systemLoader.loadClass(name)
-			}.getOrNull()
-		}
-
-		if (loadedClass == null) {
-			loadedClass = runCatching {
-				findClass(name)
-			}.getOrElse {
-				super.loadClass(name, resolve)
-			}
-		}
-
-		if (resolve) {
-			resolveClass(loadedClass)
-		}
-
+		val loadedClass = findLoadedClass(name)?.takeIf { it.classLoader == this }
+			?: runCatching { findClass(name) }.getOrNull()
+			?: findLoadedClass(name)
+			?: runCatching { systemClassLoader?.loadClass(name) }.getOrNull()
+			?: super.loadClass(name, resolve)
+		if (resolve) resolveClass(loadedClass)
 		return loadedClass
 	}
 
