@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
+import dalvik.system.DexFile
 import androidx.core.content.pm.PackageInfoCompat
 import eu.kanade.tachiyomi.source.CatalogueSource
 import eu.kanade.tachiyomi.source.Source
@@ -33,6 +34,8 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 import kotlin.math.abs
 import androidx.core.graphics.createBitmap
+import tsuki.network.CommonHeaders
+import tsuki.network.UserAgents
 
 class NativeExtManager(
 	context: Context,
@@ -86,7 +89,8 @@ class NativeExtManager(
 
 	suspend fun install(artifact: ExtArtifact): Boolean = mutex.withLock {
 		withContext(Dispatchers.IO) {
-			val pkg = artifact.packageName.trim().takeIf { PACKAGE_REGEX.matches(it) } ?: return@withContext false
+			val pkg = artifact.packageName.trim().takeIf { PACKAGE_REGEX.matches(it) }
+				?: return@withContext false
 			val staging = File(directory, "$pkg.staging.apk")
 			val downloaded = File(directory, "$pkg.download")
 			val destination = File(directory, "$pkg.apk")
@@ -97,19 +101,24 @@ class NativeExtManager(
 			}
 
 			var loaded: MangaResult.Success? = null
+			var lastError = "Failed to load extension"
 			for (url in candidates) {
 				downloaded.delete(); staging.delete()
-				if (!download(url, downloaded) || !prepareDex(downloaded, staging) || !makeReadOnly(staging)) continue
-				val result = loadArtifact(staging, artifact)
-				if (result is MangaResult.Success) {
-					loaded = result
-					break
+				if (!download(url, downloaded)) { lastError = "Download failed: $url"; continue }
+				if (!prepareDex(downloaded, staging) || !makeReadOnly(staging)) {
+					lastError = "Unsupported package format: $url"
+					continue
+				}
+				when (val result = loadArtifact(staging, artifact)) {
+					is MangaResult.Success -> { loaded = result; break }
+					is MangaResult.Error -> lastError = result.message
+					else -> lastError = "Untrusted extension"
 				}
 			}
 			downloaded.delete()
 			if (loaded == null) {
 				staging.delete()
-				lastInstallError = "Failed to load extension"
+				lastInstallError = lastError
 				return@withContext false
 			}
 
@@ -140,7 +149,8 @@ class NativeExtManager(
 		}
 	}
 
-	suspend fun installLocal(sourceFile: File, originalName: String? = null): Boolean = mutex.withLock {
+	suspend fun installLocal(sourceFile: File, originalName: String? = null): Boolean =
+		mutex.withLock {
 		withContext(Dispatchers.IO) {
 			if (!sourceFile.exists() || sourceFile.length() == 0L) {
 				lastInstallError = "Source file does not exist or is empty"
@@ -183,7 +193,9 @@ class NativeExtManager(
 				val iconUrl = extractIcon(destination, realPkg)
 				val record = ExtInstalled(
 					packageName = realPkg,
-					name = result.appName.ifBlank { originalName?.removeSuffix(".apk")?.removeSuffix(".jar") ?: realPkg },
+					name = result.appName.ifBlank {
+						originalName?.removeSuffix(".apk")?.removeSuffix(".jar") ?: realPkg
+					},
 					repositoryUrl = "local://$realPkg",
 					jarUrl = null,
 					apkUrl = null,
@@ -278,7 +290,9 @@ class NativeExtManager(
 		}
 
 		val suffixCount = loadedSources.groupingBy { it.pkgName to it.displayName }.eachCount()
-		val normalized = loadedSources.map { it.copy(hasLanguageSuffix = (suffixCount[it.pkgName to it.displayName] ?: 0) > 1) }
+		val normalized = loadedSources.map {
+			it.copy(hasLanguageSuffix = (suffixCount[it.pkgName to it.displayName] ?: 0) > 1)
+		}
 		sourceByName.clear(); sourceById.clear()
 		normalized.forEach {
 			sourceByName[it.name] = it
@@ -302,13 +316,18 @@ class NativeExtManager(
 			?: return MangaResult.Error(pkg, "Missing lib version")
 		if (libVer !in 1.4..1.6) return MangaResult.Error(pkg, "Incompatible lib version: $libVer")
 
-		val classNames = meta.getString("tachiyomi.extension.class") ?: meta.getString("tachiyomi.extension.factory")
+		val classNames = meta.getString("tachiyomi.extension.class")
+			?: meta.getString("tachiyomi.extension.factory")
 			?: return MangaResult.Error(pkg, "Missing source class")
 		val isNsfw = (contentTypeFromManifest(meta) ?: artifact.contentType) == ContentType.HENTAI
 
 		val loader = runCatching {
 			val optDir = File(dexDir, pkg).also { it.mkdirs() }
-			DirectDexClassLoader(file.absolutePath, optDir.absolutePath, null, appContext.classLoader)
+			val timeDex = getDex(appContext)
+			val dexPath = if (timeDex != null && timeDex.exists()) {
+				"${file.absolutePath}${File.pathSeparator}${timeDex.absolutePath}"
+			} else file.absolutePath
+			DirectDexClassLoader(dexPath, optDir.absolutePath, null, appContext.classLoader)
 		}.getOrElse { return MangaResult.Error(pkg, "ClassLoader error: ${it.message}", it) }
 
 		return runCatching {
@@ -324,11 +343,29 @@ class NativeExtManager(
 				versionCode = pkgInfo?.let(PackageInfoCompat::getLongVersionCode) ?: artifact.versionCode ?: 0L,
 				versionName = verName,
 				libVersion = libVer,
-				lang = sources.mapNotNull { (it as? CatalogueSource)?.lang }.distinct().let { if (it.size == 1) it.first() else "all" },
+				lang = sources.mapNotNull { (it as? CatalogueSource)?.lang }.distinct()
+					.let { if (it.size == 1) it.first() else "all" },
 				isNsfw = isNsfw,
 				sources = sources,
 			)
-		}.getOrElse { MangaResult.Error(pkg, "Source load error: ${it.message}", it) }
+		}.getOrElse {
+			// Release the dex the loader mmap-ed so it does not leak until finalization.
+			closeDexQuietly(loader)
+			MangaResult.Error(pkg, "Source load error: ${it.message}", it)
+		}
+	}
+
+	private fun closeDexQuietly(loader: ClassLoader) = runCatching {
+		val pathList = ClassLoader::class.java.getDeclaredField("pathList")
+			.apply { isAccessible = true }.get(loader)
+		val elements = pathList?.javaClass?.getDeclaredField("dexElements")
+			?.apply { isAccessible = true }?.get(pathList) as? Array<*> ?: return@runCatching
+		for (elementRaw in elements) {
+			val element = elementRaw ?: continue
+			val dexFile = element.javaClass.getDeclaredField("dexFile")
+				.apply { isAccessible = true }.get(element) as? DexFile ?: continue
+			runCatching { dexFile.close() }
+		}
 	}
 
 	private fun getArchiveLabel(file: File, pkgInfo: PackageInfo?): String? = runCatching {
@@ -396,7 +433,9 @@ class NativeExtManager(
 	}.getOrNull()
 
 	private fun loadSources(pkg: String, names: String, loader: ClassLoader): List<Source> =
-		names.split(';', ':', ',').map { it.trim() }.filter { it.isNotEmpty() }.map { if (it.startsWith('.')) pkg + it else it }.flatMap { cls ->
+		names.split(';', ':', ',').map { it.trim() }.filter { it.isNotEmpty() }.map {
+			if (it.startsWith('.')) pkg + it else it
+		}.flatMap { cls ->
 			when (val inst = loader.loadClass(cls).getDeclaredConstructor().newInstance()) {
 				is Source -> listOf(inst)
 				is SourceFactory -> inst.createSources()
@@ -404,13 +443,22 @@ class NativeExtManager(
 			}
 		}
 
-	private fun getPackageInfo(file: File): PackageInfo? = runCatching {
-		@Suppress("DEPRECATION")
-		appContext.packageManager.getPackageArchiveInfo(file.absolutePath, PackageManager.GET_META_DATA or PackageManager.GET_CONFIGURATIONS)
-	}.getOrNull()
+	private fun getPackageInfo(file: File): PackageInfo? {
+		val direct = runCatching {
+			@Suppress("DEPRECATION")
+			appContext.packageManager.getPackageArchiveInfo(
+				file.absolutePath, PackageManager.GET_META_DATA or PackageManager.GET_CONFIGURATIONS,
+			)
+		}.getOrNull()
+		if (direct != null || android.os.Build.VERSION.SDK_INT >= 26) return direct
+		// On Android 5-7 the platform parser rejects extension APKs whose manifest declares a
+		// newer minSdkVersion (ships minSdk 26 with 1.6 lib), so read the manifest ourselves.
+		return ManifestResolver.parse(file)
+	}
 
 	private fun download(url: String, dest: File): Boolean = runCatching {
-		val req = Request.Builder().url(url).header("User-Agent", "Usagi-TachiyomiExtension/1.0").get().build()
+		val req = Request.Builder().url(url)
+			.header(CommonHeaders.USER_AGENT, UserAgents.KOTATSU).get().build()
 		client.newCall(req).execute().use { res ->
 			if (!res.isSuccessful) return@use false
 			val body = res.body
@@ -436,8 +484,12 @@ class NativeExtManager(
 	private fun readLibVersion(meta: Bundle, verName: String): Double? {
 		val raw = runCatching { meta.get("tachiyomix.extensionLib") }.getOrNull()
 		val num = when (raw) {
-			is Number -> raw.toDouble()
-			is String -> raw.toDoubleOrNull()
+			is Number -> raw.toDouble().let {
+				if (it > 1000000) java.lang.Float.intBitsToFloat(it.toInt()).toDouble() else it
+			}
+			is String -> raw.toDoubleOrNull()?.let {
+				if (it > 1000000) java.lang.Float.intBitsToFloat(it.toInt()).toDouble() else it
+			}
 			else -> verName.substringBeforeLast('.').toDoubleOrNull()
 		} ?: return null
 		return when {
