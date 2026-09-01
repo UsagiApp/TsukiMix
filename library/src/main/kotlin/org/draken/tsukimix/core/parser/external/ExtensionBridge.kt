@@ -13,9 +13,6 @@ import kotlinx.serialization.SerialFormat
 import kotlinx.serialization.StringFormat
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.protobuf.ProtoBuf
-import nl.adaptivity.xmlutil.XmlDeclMode
-import nl.adaptivity.xmlutil.core.XmlVersion
-import nl.adaptivity.xmlutil.serialization.XML
 import okhttp3.CookieJar
 import okhttp3.OkHttpClient
 import org.draken.tsukimix.core.parser.external.preference.AndroidPreferenceStore
@@ -53,13 +50,6 @@ class ExtensionBridge(
 			ignoreUnknownKeys = true
 			explicitNulls = false
 		}
-		val xml = XML {
-			defaultPolicy { ignoreUnknownChildren() }
-			autoPolymorphic = true
-			xmlDeclMode = XmlDeclMode.Charset
-			indent = 2
-			xmlVersion = XmlVersion.XML10
-		}
 		val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 		val preferenceStore = AndroidPreferenceStore(context, sharedPreferences)
 		val application = context.applicationContext as Application
@@ -76,7 +66,6 @@ class ExtensionBridge(
 				addSingletonFactory<Json> { json }
 				addSingletonFactory<StringFormat> { json }
 				addSingletonFactory<SerialFormat> { json }
-				addSingletonFactory<XML> { xml }
 				addSingletonFactory<ProtoBuf> { ProtoBuf }
 				addSingletonFactory<JavaScriptEngine> { JavaScriptEngine(javaScriptEvaluator) }
 			}
