@@ -245,6 +245,21 @@ class NativeExtManager(
 	fun getLanguage(source: Manga): List<Manga> = resolver.getVariants(source, _sources.value)
 	fun getActiveLanguage(source: Manga): String? = resolver.getActiveLanguage(source, _sources.value)
 	fun setActiveLanguage(source: Manga, language: String) = resolver.setActiveLanguage(source, language)
+	fun refresh(source: Manga): Manga {
+		val record = readRecords().firstOrNull { it.packageName == source.pkgName } ?: return source
+		val file = File(directory, "${record.packageName}.apk")
+		if (!file.exists()) return source
+		val result = loadArtifact(file, record.toArtifact())
+		if (result is MangaResult.Success) {
+			result.catalogueSources.firstOrNull { it.id == source.sourceId }?.let { new ->
+				val updated = source.copy(catalogueSource = new)
+				sourceById[updated.sourceId] = updated
+				sourceByName[updated.name] = updated
+				return updated
+			}
+		}
+		return source
+	}
 
 	private fun reload() {
 		injektBridge.initialize()

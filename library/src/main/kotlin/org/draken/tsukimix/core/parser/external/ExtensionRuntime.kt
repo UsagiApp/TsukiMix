@@ -59,6 +59,7 @@ class ExtRuntime(
 	fun getSourceByName(name: String): Manga? = directManager.getSourceByName(name) ?: installedManager.getSourceByName(name)
 	fun getSourceById(id: Long): Manga? = directManager.getSourceById(id) ?: installedManager.getSourceById(id)
 	fun resolve(s: Manga): Manga = if (directManager.owns(s)) directManager.resolve(s) else installedManager.resolve(s)
+	fun refresh(s: Manga): Manga = if (directManager.owns(s)) directManager.refresh(s) else installedManager.refresh(s)
 	fun getLanguage(s: Manga): List<Manga> = if (directManager.owns(s)) directManager.getLanguage(s) else installedManager.getLanguage(s)
 	fun getSiblingSources(s: Manga): List<Manga> = getLanguage(s)
 	fun getActiveLanguage(s: Manga): String? = if (directManager.owns(s)) directManager.getActiveLanguage(s) else installedManager.getActiveLanguage(s)

@@ -96,6 +96,21 @@ class ExtensionManager(
 		return resolver.resolve(source, _sources.value)
 	}
 
+	fun refresh(source: Manga): Manga {
+		val result = runCatching {
+			kotlinx.coroutines.runBlocking { loader.loadExtension(context, source.pkgName) }
+		}.getOrNull()
+		if (result is MangaResult.Success) {
+			result.catalogueSources.firstOrNull { it.id == source.sourceId }?.let { new ->
+				val updated = source.copy(catalogueSource = new)
+				sourcesById[updated.sourceId] = updated
+				sourcesByName[updated.name] = updated
+				return updated
+			}
+		}
+		return source
+	}
+
 	fun getSourcesByLanguage(): Map<String, List<CatalogueSource>> {
 		return _installedExtensions.value
 			.flatMap { it.catalogueSources }

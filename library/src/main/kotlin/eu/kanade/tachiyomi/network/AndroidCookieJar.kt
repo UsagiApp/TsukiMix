@@ -12,6 +12,7 @@ class AndroidCookieJar : CookieJar {
 	override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
 		val urlString = url.toString()
 		cookies.forEach { manager.setCookie(urlString, it.toString()) }
+		manager.flush()
 	}
 
 	override fun loadForRequest(url: HttpUrl): List<Cookie> = get(url)
@@ -28,14 +29,16 @@ class AndroidCookieJar : CookieJar {
 	fun remove(url: HttpUrl, cookieNames: List<String>? = null, maxAge: Int = -1): Int {
 		val urlString = url.toString()
 		val cookies = manager.getCookie(urlString) ?: return 0
-		return cookies.split(";")
+		val count = cookies.split(";")
 			.map { it.substringBefore("=").trim() }
 			.filter { cookieNames == null || it in cookieNames }
 			.onEach { manager.setCookie(urlString, "$it=;Max-Age=$maxAge") }
 			.count()
+		if (count > 0) manager.flush()
+		return count
 	}
 
 	fun removeAll() {
-		manager.removeAllCookies {}
+		manager.removeAllCookies { manager.flush() }
 	}
 }
