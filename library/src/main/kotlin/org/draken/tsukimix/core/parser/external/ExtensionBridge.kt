@@ -6,6 +6,7 @@ import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.preference.PreferenceManager
+import app.cash.quickjs.QuickJs
 import eu.kanade.tachiyomi.network.AndroidCookieJar
 import eu.kanade.tachiyomi.network.JavaScriptEngine
 import eu.kanade.tachiyomi.network.NetworkHelper
@@ -40,6 +41,7 @@ class ExtensionBridge(
 	@Synchronized
 	fun initialize() {
 		if (initialized) return
+		QuickJs.setContext(context)
 		val networkHelper = ExtensionNetworkHelper(
 			context = context,
 			baseClient = httpClient,

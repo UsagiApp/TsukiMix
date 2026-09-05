@@ -1,6 +1,8 @@
 -keep,allowoptimization class eu.kanade.tachiyomi.** { public protected *; }
 -keep,allowoptimization class tachiyomi.** { public protected *; }
 -keep,allowoptimization class keiyoushi.** { public protected *; }
+-keep class app.cash.quickjs.** { *; }
+-keepclassmembers class app.cash.quickjs.** { *; }
 
 -keep class kotlinx.serialization.** { *; }
 -keep interface kotlinx.serialization.** { *; }

@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 import kotlin.math.abs
 import androidx.core.graphics.createBitmap
+import app.cash.quickjs.QuickJs
 import tsuki.network.CommonHeaders
 import tsuki.network.UserAgents
 
@@ -76,6 +77,7 @@ class NativeExtManager(
 
 	init {
 		activeInstance = WeakReference(this)
+		QuickJs.setContext(appContext)
 	}
 
 	suspend fun ensureReady(forceRefresh: Boolean = false) {

@@ -2,15 +2,10 @@
 
 package eu.kanade.tachiyomi.network
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.webkit.WebView
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
+import app.cash.quickjs.QuickJs
 import org.json.JSONObject
 import org.json.JSONTokener
-import kotlin.coroutines.resume
 
 /**
  * Util for evaluating JavaScript in sources.
@@ -18,28 +13,23 @@ import kotlin.coroutines.resume
  * @since extension-lib 1.4
  */
 class JavaScriptEngine internal constructor(
-	private val evaluator: suspend (String) -> String?,
+	private val evaluator: (suspend (String) -> String?)? = null,
 ) {
 
-	constructor(context: Context) : this({ script -> evaluate(context, script) })
+	constructor(context: Context) : this(null)
 
 	suspend fun <T> evaluate(script: String): T {
-		val value = evaluator(script)?.let { JSONTokener(it).nextValue() }
-		return (if (value == JSONObject.NULL) null else value) as T
-	}
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-private suspend fun evaluate(context: Context, script: String): String? {
-	return withContext(Dispatchers.Main.immediate) {
-		val webView = WebView(context.applicationContext)
-		try {
-			webView.settings.javaScriptEnabled = true
-			suspendCancellableCoroutine { continuation ->
-				webView.evaluateJavascript(script) { continuation.resume(it) }
+		val eval = evaluator
+		if (eval != null) {
+			return runCatching {
+				QuickJs.create().use { it.evaluate(script) as T }
+			}.getOrElse {
+				val value = eval(script)?.let { JSONTokener(it).nextValue() }
+				(if (value == JSONObject.NULL) null else value) as T
 			}
-		} finally {
-			webView.destroy()
+		}
+		return QuickJs.create().use {
+			it.evaluate(script) as T
 		}
 	}
 }

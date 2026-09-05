@@ -23,6 +23,12 @@ internal class DirectDexClassLoader(
 	private val sys = getSystemClassLoader()
 
 	override fun loadClass(name: String, resolve: Boolean): Class<*> {
+		if (name.startsWith("app.cash.quickjs.")) {
+			val cls = runCatching { super.loadClass(name, false) }
+				.getOrElse { app.cash.quickjs.QuickJs::class.java.classLoader?.loadClass(name) ?: throw it }
+			if (resolve) resolveClass(cls)
+			return cls
+		}
 		val cls = findLoadedClass(name)
 			?: runCatching { sys?.loadClass(name) }.getOrNull()
 			?: runCatching { findClass(name) }.getOrElse { super.loadClass(name, false) }
