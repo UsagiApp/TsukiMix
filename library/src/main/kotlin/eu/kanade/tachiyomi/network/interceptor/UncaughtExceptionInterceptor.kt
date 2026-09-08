@@ -9,7 +9,7 @@ class UncaughtExceptionInterceptor : Interceptor {
 	override fun intercept(chain: Interceptor.Chain): Response {
 		return try {
 			chain.proceed(chain.request())
-		} catch (e: Exception) {
+		} catch (e: Throwable) {
 			if (e is IOException) {
 				throw e
 			}
