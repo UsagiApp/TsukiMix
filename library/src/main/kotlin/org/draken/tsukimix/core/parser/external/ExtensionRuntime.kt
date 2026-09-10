@@ -68,6 +68,7 @@ class ExtRuntime(
 	}
 
 	fun addLangToPref(screen: PreferenceScreen, source: Manga, title: CharSequence, onChanged: () -> Unit) {
+		ExtensionSourceSettings.addUaToPref(screen, source)
 		val variants = getLanguage(source).distinctBy { it.locale.lowercase(Locale.ROOT) }.sortedBy { it.languageDisplayName }
 		if (variants.size <= 1) return
 		ListPreference(screen.context).apply {

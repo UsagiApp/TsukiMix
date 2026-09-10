@@ -4,8 +4,13 @@ package org.draken.tsukimix.core.parser.external
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.view.inputmethod.EditorInfo
+import android.webkit.WebSettings
 import androidx.core.content.edit
 import androidx.core.net.toUri
+import androidx.preference.EditTextPreference
+import androidx.preference.Preference
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.online.HttpSource
 import okhttp3.HttpUrl
@@ -13,12 +18,18 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.Response
 import org.draken.tsukimix.core.parser.external.model.Manga
+import tsuki.network.CommonHeaders
+import tsuki.network.UserAgents
 import java.util.concurrent.ConcurrentHashMap
+
+private const val APP_PREF = "org.draken.usagi.settings.utils.AutoCompleteTextViewPreference"
+private const val DEF_PROVIDER = "org.draken.usagi.settings.utils.EditTextDefaultSummaryProvider"
 
 object ExtensionSourceSettings {
 
 	const val KEY_DOMAIN = "domain"
 	const val KEY_OVERRIDE_BASE_URL = "overrideBaseUrl"
+	const val KEY_USER_AGENT = "user_agent"
 	private const val KEY_DEFAULT_BASE_URL = "defaultBaseUrl"
 	private const val KEY_SLOWDOWN = "slowdown"
 	private val SOURCE_REGEX = "[^a-zA-Z0-9]".toRegex()
@@ -57,6 +68,7 @@ object ExtensionSourceSettings {
 	}
 
 	fun refreshDomainOverride(context: Context, source: Manga) {
+		refreshUa(context, source)
 		val httpSource = source.catalogueSource as? HttpSource ?: return
 		val prefs = preferences(context, source)
 		val domain = domain(prefs)
@@ -110,6 +122,67 @@ object ExtensionSourceSettings {
 	private fun HttpUrl.replaceAuthority(authority: String): HttpUrl? {
 		val replacement = "$scheme://$authority".toHttpUrlOrNull() ?: return null
 		return newBuilder().host(replacement.host).port(replacement.port).build()
+	}
+
+	private val uaMap = ConcurrentHashMap<String, String>()
+	private val UA_ARR = arrayOf(
+		UserAgents.CHROME_MOBILE,
+		UserAgents.CHROME_DESKTOP,
+		UserAgents.FIREFOX_MOBILE,
+		UserAgents.FIREFOX_DESKTOP,
+	)
+
+	fun getUa(host: String): String? = uaMap[host]
+		?: uaMap[host.removePrefix("www.")]
+		?: uaMap.entries.firstOrNull { host.endsWith(".${it.key}") }?.value
+
+	fun setUa(host: String, ua: String?) {
+		val h = host.removePrefix("www.")
+		if (ua.isNullOrBlank()) { uaMap.remove(host); uaMap.remove(h) } else { uaMap[host] = ua; uaMap[h] = ua }
+	}
+
+	fun refreshUa(ctx: Context, s: Manga) {
+		val http = s.catalogueSource as? HttpSource ?: return
+		val sp = preferences(ctx, s)
+		val ua = sp.getString(KEY_USER_AGENT, null)?.trim()?.takeIf { it.isNotEmpty() }
+		val host = sp.getString(KEY_DEFAULT_BASE_URL, null)?.toHttpUrlOrNull()?.host
+			?: http.baseUrl.toHttpUrlOrNull()?.host ?: return
+		setUa(host, ua)
+		domain(sp)?.let { setUa(it.substringBefore(':'), ua) }
+	}
+
+	fun addUaToPref(screen: PreferenceScreen, source: Manga) {
+		screen.findPreference<Preference>(KEY_USER_AGENT)?.let { screen.removePreference(it) }
+		val c = screen.context
+		val def = runCatching { WebSettings.getDefaultUserAgent(c) }.getOrDefault(UserAgents.CHROME_MOBILE)
+		// Call and add this UA option to source settings (from main app)
+		val p = runCatching {
+			(Class.forName(APP_PREF).getConstructor(Context::class.java).newInstance(c) as EditTextPreference)
+				.also { it.javaClass.getMethod("setEntries", Array<String>::class.java).invoke(it, UA_ARR) }
+		}.getOrElse { EditTextPreference(c) }.apply {
+			key = KEY_USER_AGENT
+			order = 6
+			isIconSpaceReserved = false
+			title = CommonHeaders.USER_AGENT
+			dialogTitle = CommonHeaders.USER_AGENT
+			val prov = runCatching {
+				Class.forName(DEF_PROVIDER).getConstructor(String::class.java).newInstance(def)
+			}.getOrNull()
+			val m = prov?.javaClass?.getMethod("provideSummary", EditTextPreference::class.java)
+			summaryProvider = Preference.SummaryProvider<EditTextPreference> {
+				(m?.invoke(prov, it) as? CharSequence) ?: it.text?.trim()?.ifEmpty { null } ?: "Default: $def"
+			}
+			setOnBindEditTextListener { it.inputType = EditorInfo.TYPE_CLASS_TEXT; it.hint = def }
+			setOnPreferenceChangeListener { _, v ->
+				val ua = (v as? String)?.trim()?.ifEmpty { null }
+				preferences(c, source).edit {
+					if (ua == null) remove(KEY_USER_AGENT) else putString(KEY_USER_AGENT, ua)
+				}
+				refreshUa(c, source)
+				true
+			}
+		}
+		screen.addPreference(p)
 	}
 }
 
