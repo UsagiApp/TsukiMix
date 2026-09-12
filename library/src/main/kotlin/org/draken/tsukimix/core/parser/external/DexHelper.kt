@@ -62,7 +62,7 @@ internal fun prepareDex(input: File, output: File): Boolean = runCatching {
 }.getOrDefault(false)
 
 internal fun normalizeLegacyDex(file: File): Boolean {
-	if (Build.VERSION.SDK_INT >= 26) return true
+	if (!callDex) return true
 	val tmp = File(file.parentFile, "${file.name}.tmp")
 	return runCatching {
 		var maxDexIndex = 1
@@ -97,6 +97,17 @@ internal fun normalizeLegacyDex(file: File): Boolean {
 }
 
 @Volatile
+internal var callDex = Build.VERSION.SDK_INT < 26
+
+internal fun checkDexError(t: Throwable): Boolean {
+	val m = t.message.orEmpty()
+	val match = t is LinkageError || m.contains("No static method", true) ||
+		m.contains("NoClassDefFound", true) || (t.cause?.let(::checkDexError) == true)
+	if (match) callDex = true
+	return match
+}
+
+@Volatile
 private var cachedTimeDexBytes: ByteArray? = null
 
 internal fun getDexBytes(): ByteArray? {
@@ -113,7 +124,7 @@ internal fun getDexBytes(): ByteArray? {
 }
 
 internal fun getDex(context: Context): File? {
-	if (Build.VERSION.SDK_INT >= 26) return null
+	if (!callDex) return null
 	val bytes = getDexBytes() ?: return null
 	val dir = File(context.cacheDir, "tsukimix").also { it.mkdirs() }
 	val dest = File(dir, "utils.dex")

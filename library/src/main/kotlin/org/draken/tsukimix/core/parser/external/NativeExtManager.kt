@@ -338,17 +338,26 @@ class NativeExtManager(
 			?: return MangaResult.Error(pkg, "Missing source class")
 		val isNsfw = (contentTypeFromManifest(meta) ?: artifact.contentType) == ContentType.HENTAI
 
-		val loader = runCatching {
-			val optDir = File(dexDir, pkg).also { it.mkdirs() }
-			val timeDex = getDex(appContext)
-			val dexPath = if (timeDex != null && timeDex.exists()) {
-				"${file.absolutePath}${File.pathSeparator}${timeDex.absolutePath}"
+		fun getLoader(): DirectDexClassLoader {
+			val dex = getDex(appContext)
+			val path = if (dex?.exists() == true) {
+				"${file.absolutePath}${File.pathSeparator}${dex.absolutePath}"
 			} else file.absolutePath
-			DirectDexClassLoader(dexPath, optDir.absolutePath, null, appContext.classLoader)
-		}.getOrElse { return MangaResult.Error(pkg, "ClassLoader error: ${it.message}", it) }
+			val opt = File(dexDir, pkg).also { it.mkdirs() }.path
+			return DirectDexClassLoader(path, opt, null, appContext.classLoader)
+		}
+
+		var loader = runCatching { getLoader() }
+			.getOrElse { return MangaResult.Error(pkg, "ClassLoader error: ${it.message}", it) }
 
 		return runCatching {
-			val sources = loadSources(pkg, classNames, loader)
+			val sources = runCatching { loadSources(pkg, classNames, loader) }
+				.recoverCatching { t ->
+					if (!checkDexError(t)) throw t
+					closeDexQuietly(loader)
+					loader = getLoader()
+					loadSources(pkg, classNames, loader)
+				}.getOrThrow()
 			if (sources.isEmpty()) error("No sources")
 			classLoaders[pkg] = loader
 			val rawAppName = getArchiveLabel(file, pkgInfo) ?: artifact.name
