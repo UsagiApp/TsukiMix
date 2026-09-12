@@ -25,33 +25,79 @@ import java.util.zip.CRC32
 
 private const val MEMO_TAG = "#memo="
 
-private fun String.withMemo(memo: JsonObject): String =
-	if (memo.isNotEmpty()) "${substringBefore(MEMO_TAG)}$MEMO_TAG$memo" else this
-
-private fun String.decodeMemo(): Pair<String, JsonObject> {
-	val idx = indexOf(MEMO_TAG)
-	if (idx != -1) {
-		val json = runCatching {
-			Json.parseToJsonElement(substring(idx + MEMO_TAG.length)).jsonObject
-		}.getOrNull()
-		if (json != null) return substring(0, idx) to json
-	}
-	if (contains('/')) {
-		val clean = trim('/')
-		val slug = clean.substringAfterLast('/')
-		val path = "/${clean.substringBeforeLast('/')}/"
-		if (slug.isNotBlank() && path.length > 2) {
-			return slug to buildJsonObject { put("mangaPath", JsonPrimitive(path)) }
+fun resolveBranch(source: ExternalManga, scanlator: String? = null): String? {
+	val lang =
+		if (source.locale.isBlank() || source.locale.equals("all", ignoreCase = true)) {
+			null
+		} else {
+			val loc = Locale.forLanguageTag(source.locale)
+			loc.getDisplayName(loc).takeIf { it.isNotBlank() && it != source.locale }
+				?: loc.getDisplayName(Locale.getDefault()).takeIf { it.isNotBlank() && it != source.locale }
+				?: loc.displayLanguage.takeIf { it.isNotBlank() }
+				?: source.locale.uppercase()
 		}
+	val group = scanlator?.trim()?.takeIf { it.isNotBlank() }
+	return when {
+		lang != null && group != null -> "$lang ($group)"
+		group != null -> group
+		else -> lang
 	}
-	return this to JsonObject(emptyMap())
 }
 
-fun SManga.toManga(
-	source: ExternalManga,
-	fallbackUrl: String? = null,
-	fallbackTitle: String? = null,
-): Manga {
+fun Manga.toSManga(): SManga = SManga.create().also {
+	val (cleanUrl, parsedMemo) = url.decodeMemo()
+	it.url = cleanUrl
+	it.memo = parsedMemo
+	it.title = title
+	it.thumbnail_url = coverUrl
+	it.author = authors.firstOrNull()
+	it.artist = authors.drop(1).firstOrNull()
+	it.description = description
+	it.genre = tags.joinToString(", ") { tag -> tag.title }
+	it.status = state.toSMangaStatus()
+	it.initialized = true
+}
+
+fun MangaChapter.toSChapter(): SChapter = SChapter.create().also {
+	val (cleanUrl, parsedMemo) = url.decodeMemo()
+	it.url = cleanUrl
+	it.memo = parsedMemo
+	it.name = title.orEmpty()
+	it.chapter_number = number
+	it.scanlator = scanlator
+	it.date_upload = uploadDate
+}
+
+fun Page.toMangaPage(source: ExternalManga, resolvedUrl: String): MangaPage = MangaPage(
+	id = stableId(source.name, "$index:$resolvedUrl"),
+	url = resolvedUrl,
+	preview = null,
+	source = source,
+)
+
+fun SChapter.toMangaChapter(source: ExternalManga, mangaTitle: String, fallbackIndex: Int = 0): MangaChapter {
+	val safeUrl = runCatching { url }.getOrNull()?.takeIf { it.isNotBlank() }
+		?: "$mangaTitle#$fallbackIndex"
+	val safeName = runCatching { name }.getOrNull().orEmpty()
+	val number = chapter_number.takeIf { it >= 0f }
+		?: ResolveTitle.parseChapterNumber(mangaTitle, safeName).toFloat().takeIf { it >= 0f }
+		?: 0f
+	val group = runCatching { scanlator }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }
+	val rawUrl = safeUrl.substringBefore(MEMO_TAG)
+	return MangaChapter(
+		id = stableId(source.name, rawUrl),
+		title = safeName.takeIf { it.isNotBlank() },
+		number = number,
+		volume = 0,
+		url = safeUrl.withMemo(memo),
+		scanlator = group,
+		uploadDate = runCatching { date_upload }.getOrDefault(0),
+		branch = resolveBranch(source, group),
+		source = source,
+	)
+}
+
+fun SManga.toManga(source: ExternalManga, fallbackUrl: String? = null, fallbackTitle: String? = null): Manga {
 	val safeUrl = safeUrl(fallbackUrl)
 	val safeTitle = safeTitle(fallbackTitle ?: safeUrl)
 	val publicUrl = runCatching {
@@ -81,77 +127,16 @@ fun SManga.toManga(
 	)
 }
 
-fun Manga.toSManga(): SManga = SManga.create().also {
-	val (cleanUrl, parsedMemo) = url.decodeMemo()
-	it.url = cleanUrl
-	it.memo = parsedMemo
-	it.title = title
-	it.thumbnail_url = coverUrl
-	it.author = authors.firstOrNull()
-	it.artist = authors.drop(1).firstOrNull()
-	it.description = description
-	it.genre = tags.joinToString(", ") { tag -> tag.title }
-	it.status = state.toSMangaStatus()
-	it.initialized = true
-}
+// Some private helper functions
 
-fun branchNameFor(source: ExternalManga, scanlator: String? = null): String? {
-	val lang =
-		if (source.locale.isBlank() || source.locale.equals("all", ignoreCase = true)) {
-			null
-		} else {
-			val loc = Locale.forLanguageTag(source.locale)
-			loc.getDisplayName(loc).takeIf { it.isNotBlank() && it != source.locale }
-				?: loc.getDisplayName(Locale.getDefault()).takeIf { it.isNotBlank() && it != source.locale }
-				?: loc.displayLanguage.takeIf { it.isNotBlank() }
-				?: source.locale.uppercase()
-		}
-	val group = scanlator?.trim()?.takeIf { it.isNotBlank() }
-	return when {
-		lang != null && group != null -> "$lang ($group)"
-		group != null -> group
-		else -> lang
+private fun stableId(vararg parts: String): Long {
+	val crc = CRC32()
+	parts.forEach {
+		crc.update(it.toByteArray())
+		crc.update(0)
 	}
+	return crc.value
 }
-
-fun SChapter.toMangaChapter(source: ExternalManga, mangaTitle: String, fallbackIndex: Int = 0): MangaChapter {
-	val safeUrl = runCatching { url }.getOrNull()?.takeIf { it.isNotBlank() }
-		?: "$mangaTitle#$fallbackIndex"
-	val safeName = runCatching { name }.getOrNull().orEmpty()
-	val number = chapter_number.takeIf { it >= 0f }
-		?: ResolveTitle.parseChapterNumber(mangaTitle, safeName).toFloat().takeIf { it >= 0f }
-		?: 0f
-	val group = runCatching { scanlator }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }
-	val rawUrl = safeUrl.substringBefore(MEMO_TAG)
-	return MangaChapter(
-		id = stableId(source.name, rawUrl),
-		title = safeName.takeIf { it.isNotBlank() },
-		number = number,
-		volume = 0,
-		url = safeUrl.withMemo(memo),
-		scanlator = group,
-		uploadDate = runCatching { date_upload }.getOrDefault(0),
-		branch = branchNameFor(source, group),
-		source = source,
-	)
-}
-
-fun MangaChapter.toSChapter(): SChapter = SChapter.create().also {
-	val (cleanUrl, parsedMemo) = url.decodeMemo()
-	it.url = cleanUrl
-	it.memo = parsedMemo
-	it.name = title.orEmpty()
-	it.chapter_number = number
-	it.scanlator = scanlator
-	it.date_upload = uploadDate
-}
-
-fun Page.toMangaPage(source: ExternalManga, resolvedUrl: String): MangaPage = MangaPage(
-	id = stableId(source.name, "$index:$resolvedUrl"),
-	url = resolvedUrl,
-	preview = null,
-	source = source,
-)
 
 private fun Int.toMangaState(): MangaState? = when (this) {
 	SManga.ONGOING -> MangaState.ONGOING
@@ -184,11 +169,24 @@ private fun SManga.safeGenres(): List<String> {
 	return runCatching { getGenres().orEmpty() }.getOrDefault(emptyList())
 }
 
-private fun stableId(vararg parts: String): Long {
-	val crc = CRC32()
-	parts.forEach {
-		crc.update(it.toByteArray())
-		crc.update(0)
+private fun String.decodeMemo(): Pair<String, JsonObject> {
+	val idx = indexOf(MEMO_TAG)
+	if (idx != -1) {
+		val json = runCatching {
+			Json.parseToJsonElement(substring(idx + MEMO_TAG.length)).jsonObject
+		}.getOrNull()
+		if (json != null) return substring(0, idx) to json
 	}
-	return crc.value
+	if (contains('/')) {
+		val clean = trim('/')
+		val slug = clean.substringAfterLast('/')
+		val path = "/${clean.substringBeforeLast('/')}/"
+		if (slug.isNotBlank() && path.length > 2) {
+			return slug to buildJsonObject { put("mangaPath", JsonPrimitive(path)) }
+		}
+	}
+	return this to JsonObject(emptyMap())
 }
+
+private fun String.withMemo(memo: JsonObject): String =
+	if (memo.isNotEmpty()) "${substringBefore(MEMO_TAG)}$MEMO_TAG$memo" else this
