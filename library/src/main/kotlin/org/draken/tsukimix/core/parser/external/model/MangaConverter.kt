@@ -6,6 +6,11 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import org.draken.tsukimix.core.parser.external.chapter.ResolveTitle
 import org.draken.tsukimix.core.parser.external.model.Manga as ExternalManga
 import tsuki.model.ContentRating
@@ -18,6 +23,30 @@ import tsuki.model.RATING_UNKNOWN
 import java.util.Locale
 import java.util.zip.CRC32
 
+private const val MEMO_TAG = "#memo="
+
+private fun String.withMemo(memo: JsonObject): String =
+	if (memo.isNotEmpty()) "${substringBefore(MEMO_TAG)}$MEMO_TAG$memo" else this
+
+private fun String.decodeMemo(): Pair<String, JsonObject> {
+	val idx = indexOf(MEMO_TAG)
+	if (idx != -1) {
+		val json = runCatching {
+			Json.parseToJsonElement(substring(idx + MEMO_TAG.length)).jsonObject
+		}.getOrNull()
+		if (json != null) return substring(0, idx) to json
+	}
+	if (contains('/')) {
+		val clean = trim('/')
+		val slug = clean.substringAfterLast('/')
+		val path = "/${clean.substringBeforeLast('/')}/"
+		if (slug.isNotBlank() && path.length > 2) {
+			return slug to buildJsonObject { put("mangaPath", JsonPrimitive(path)) }
+		}
+	}
+	return this to JsonObject(emptyMap())
+}
+
 fun SManga.toManga(
 	source: ExternalManga,
 	fallbackUrl: String? = null,
@@ -28,11 +57,12 @@ fun SManga.toManga(
 	val publicUrl = runCatching {
 		(source.catalogueSource as? HttpSource)?.getMangaUrl(this)
 	}.getOrNull() ?: safeUrl
+	val rawUrl = safeUrl.substringBefore(MEMO_TAG)
 	return Manga(
-		id = stableId(source.name, safeUrl.ifBlank { safeTitle }),
+		id = stableId(source.name, rawUrl.ifBlank { safeTitle }),
 		title = safeTitle,
 		altTitles = emptySet(),
-		url = safeUrl,
+		url = safeUrl.withMemo(memo),
 		publicUrl = publicUrl,
 		rating = RATING_UNKNOWN,
 		contentRating = if (source.isNsfw) ContentRating.ADULT else null,
@@ -52,7 +82,9 @@ fun SManga.toManga(
 }
 
 fun Manga.toSManga(): SManga = SManga.create().also {
-	it.url = url
+	val (cleanUrl, parsedMemo) = url.decodeMemo()
+	it.url = cleanUrl
+	it.memo = parsedMemo
 	it.title = title
 	it.thumbnail_url = coverUrl
 	it.author = authors.firstOrNull()
@@ -90,12 +122,13 @@ fun SChapter.toMangaChapter(source: ExternalManga, mangaTitle: String, fallbackI
 		?: ResolveTitle.parseChapterNumber(mangaTitle, safeName).toFloat().takeIf { it >= 0f }
 		?: 0f
 	val group = runCatching { scanlator }.getOrNull()?.trim()?.takeIf { it.isNotBlank() }
+	val rawUrl = safeUrl.substringBefore(MEMO_TAG)
 	return MangaChapter(
-		id = stableId(source.name, safeUrl),
+		id = stableId(source.name, rawUrl),
 		title = safeName.takeIf { it.isNotBlank() },
 		number = number,
 		volume = 0,
-		url = safeUrl,
+		url = safeUrl.withMemo(memo),
 		scanlator = group,
 		uploadDate = runCatching { date_upload }.getOrDefault(0),
 		branch = branchNameFor(source, group),
@@ -104,7 +137,9 @@ fun SChapter.toMangaChapter(source: ExternalManga, mangaTitle: String, fallbackI
 }
 
 fun MangaChapter.toSChapter(): SChapter = SChapter.create().also {
-	it.url = url
+	val (cleanUrl, parsedMemo) = url.decodeMemo()
+	it.url = cleanUrl
+	it.memo = parsedMemo
 	it.name = title.orEmpty()
 	it.chapter_number = number
 	it.scanlator = scanlator
