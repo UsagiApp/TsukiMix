@@ -46,7 +46,8 @@ fun resolveBranch(source: ExternalManga, scanlator: String? = null): String? {
 
 fun Manga.toSManga(): SManga = SManga.create().also {
 	val (cleanUrl, parsedMemo) = url.decodeMemo()
-	it.url = cleanUrl
+	val isMemo = url.contains(MEMO_TAG)
+	it.url = if (isMemo) cleanUrl else url
 	it.memo = parsedMemo
 	it.title = title
 	it.thumbnail_url = coverUrl
@@ -60,7 +61,8 @@ fun Manga.toSManga(): SManga = SManga.create().also {
 
 fun MangaChapter.toSChapter(): SChapter = SChapter.create().also {
 	val (cleanUrl, parsedMemo) = url.decodeMemo()
-	it.url = cleanUrl
+	val isMemo = url.contains(MEMO_TAG)
+	it.url = if (isMemo) cleanUrl else url
 	it.memo = parsedMemo
 	it.name = title.orEmpty()
 	it.chapter_number = number
