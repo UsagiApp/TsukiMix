@@ -14,6 +14,9 @@ import org.draken.tsukimix.core.parser.external.model.ExtArtifact
 import org.draken.tsukimix.core.parser.external.model.contentTypeFromCatalog
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.protobuf.ProtoBuf
+import org.draken.tsukimix.core.parser.external.model.IndexPb
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -161,6 +164,11 @@ class ExtensionProvider(
 			val result = runCatching {
 				client.newCall(request).execute().use { res ->
 					if (!res.isSuccessful) return@use emptyList()
+					val isPb = url.endsWith(".pb", true)
+					if (isPb) {
+						val bytes = res.body.bytes()
+						return@use parsePb(bytes, url)
+					}
 					val rawBody = res.body.string()
 					val body = decodeBody(url, rawBody)
 					val trimmed = body.removePrefix("\uFEFF").trim()
@@ -172,7 +180,7 @@ class ExtensionProvider(
 							setRepositoryName(input, repoName)
 						}
 						val indexV2 = obj?.optString("index_v2")?.takeIf { it.isNotBlank() }
-						if (indexV2 != null && !indexV2.endsWith(".pb", true)) {
+						if (indexV2 != null) {
 							val v2Result = load(indexV2)
 							if (v2Result.isNotEmpty() && !isDummyCatalog(v2Result)) return@use v2Result
 						}
@@ -359,7 +367,7 @@ class ExtensionProvider(
 				if (repoName == baseRepo) "$baseRepo-sources" else repoName,
 			).distinct()
 			val branches = listOf("repo", "main", "master", "gh-pages")
-			val files = listOf("index.json", "index.min.json", "repo.json")
+			val files = listOf("index.json", "index.min.json", "repo.json", "index.pb")
 			val list = mutableListOf<String>()
 			if (raw.startsWith("http://") || raw.startsWith("https://")) {
 				list.add(raw)
@@ -393,10 +401,16 @@ class ExtensionProvider(
 					list.add(raw.replace("/repo.json", "/index.json"))
 					list.add(raw.replace("/repo.json", "/index.min.json"))
 				}
+				raw.endsWith("/index.pb") -> {
+					list.add(raw.replace("/index.pb", "/index.json"))
+					list.add(raw.replace("/index.pb", "/index.min.json"))
+					list.add(raw.replace("/index.pb", "/repo.json"))
+				}
 				else -> {
 					list.add("$raw/index.json")
 					list.add("$raw/index.min.json")
 					list.add("$raw/repo.json")
+					list.add("$raw/index.pb")
 				}
 			}
 			return list.distinct()
@@ -483,6 +497,74 @@ class ExtensionProvider(
 				extensionLib = lib,
 				versionCode = code,
 				versionName = versionName,
+				contentType = type,
+				sources = sources,
+			)
+		}
+	}.getOrDefault(emptyList())
+
+	@OptIn(ExperimentalSerializationApi::class)
+	private fun parsePb(bytes: ByteArray, repoUrl: String): List<ExtArtifact> = runCatching {
+		val index = ProtoBuf.decodeFromByteArray<IndexPb>(bytes)
+		if (index.extensionListUrl != null) {
+			val listUrl = index.extensionListUrl
+			val listUrlResolved = when {
+				listUrl.startsWith("http://") || listUrl.startsWith("https://") -> listUrl
+				else -> "${repoUrl.substringBeforeLast('/')}/$listUrl"
+			}
+			val request = Request.Builder().url(listUrlResolved)
+				.header("Accept", "application/octet-stream")
+				.header("User-Agent", "Usagi/1.0")
+				.build()
+			return@runCatching client.newCall(request).execute().use { res ->
+				if (!res.isSuccessful) emptyList()
+				else parsePb(res.body.bytes(), repoUrl)
+			}
+		}
+		val baseRepoUrl = repoUrl.substringBeforeLast('/')
+		val extensions = index.extensionList?.extensions ?: emptyList()
+		extensions.mapNotNull { ext ->
+			val pkg = ext.packageName ?: return@mapNotNull null
+			val lib = ext.extensionLib?.toDoubleOrNull()
+			val rawNsfw = ext.contentWarning?.name
+			val type = contentTypeFromCatalog(rawNsfw, lib)
+			val apkRaw = ext.resources?.apkUrl.orEmpty()
+			val apkUrl = when {
+				apkRaw.isBlank() -> null
+				apkRaw.startsWith("http://") || apkRaw.startsWith("https://") -> apkRaw
+				else -> "$baseRepoUrl/$apkRaw"
+			}
+			val jarRaw = ext.resources?.jarUrl.orEmpty()
+			val jarUrl = when {
+				jarRaw.isBlank() -> null
+				jarRaw.startsWith("http://") || jarRaw.startsWith("https://") -> jarRaw
+				else -> "$baseRepoUrl/$jarRaw"
+			}
+			val iconRaw = ext.resources?.iconUrl.orEmpty()
+			val iconUrl = when {
+				iconRaw.isNotBlank() -> iconRaw
+				else -> "$baseRepoUrl/icon/$pkg.png"
+			}
+			val sources = ext.sources.mapNotNull { src ->
+				val id = src.id ?: return@mapNotNull null
+				ExtSource(
+					id = id,
+					name = src.name ?: pkg,
+					language = src.language ?: "all",
+					homeUrl = src.homeUrl?.takeIf { it.isNotBlank() },
+					contentType = type,
+				)
+			}
+			ExtArtifact(
+				repositoryUrl = repoUrl,
+				name = ext.name ?: pkg,
+				packageName = pkg,
+				jarUrl = jarUrl,
+				apkUrl = apkUrl,
+				iconUrl = iconUrl,
+				extensionLib = lib,
+				versionCode = ext.versionCode,
+				versionName = ext.versionName,
 				contentType = type,
 				sources = sources,
 			)
