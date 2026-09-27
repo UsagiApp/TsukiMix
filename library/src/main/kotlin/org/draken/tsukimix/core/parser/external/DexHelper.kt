@@ -23,9 +23,13 @@ internal class DirectDexClassLoader(
 	private val sys = getSystemClassLoader()
 
 	override fun loadClass(name: String, resolve: Boolean): Class<*> {
-		if (name.startsWith("app.cash.quickjs.")) {
+		if (name.startsWith("app.cash.quickjs.") || name.startsWith("kotlinx.coroutines.")) {
 			val cls = runCatching { super.loadClass(name, false) }
-				.getOrElse { app.cash.quickjs.QuickJs::class.java.classLoader?.loadClass(name) ?: throw it }
+				.getOrElse {
+					if (name.startsWith("app.cash.quickjs.")) {
+						app.cash.quickjs.QuickJs::class.java.classLoader?.loadClass(name) ?: throw it
+					} else kotlinx.coroutines.Dispatchers::class.java.classLoader?.loadClass(name) ?: throw it
+				}
 			if (resolve) resolveClass(cls)
 			return cls
 		}
