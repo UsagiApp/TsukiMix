@@ -18,10 +18,12 @@ import org.draken.tsukimix.core.parser.external.model.ExtSource
 import org.draken.tsukimix.core.parser.external.model.ExtArtifact
 import org.draken.tsukimix.core.parser.external.model.contentTypeFromCatalog
 import org.draken.tsukimix.core.parser.external.model.IndexPb
+import org.draken.tsukimix.core.parser.external.model.ExtensionListPb
 import tsuki.network.UserAgents
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 
 class ExtensionProvider(
 	context: Context,
@@ -160,13 +162,13 @@ class ExtensionProvider(
 		}
 		for (url in urls) {
 			val request = Request.Builder().url(url)
-				.header("Accept", "application/json")
-				.header("User-Agent", "Usagi/1.0")
+				.header("Accept", if (url.isPb()) "application/octet-stream, */*" else "application/json")
+				.header("User-Agent", UserAgents.KOTATSU)
 				.build()
 			val result = runCatching {
 				client.newCall(request).execute().use { res ->
 					if (!res.isSuccessful) return@use emptyList()
-					if (url.endsWith(".pb", true)) return@use parsePb(res.body.bytes(), url)
+					if (url.isPb()) return@use parsePb(res.body.bytes(), url, input = input)
 					val rawBody = res.body.string()
 					val body = decodeBody(url, rawBody)
 					val trimmed = body.removePrefix("\uFEFF").trim()
@@ -324,14 +326,11 @@ class ExtensionProvider(
 			return null
 		}
 		val gh = GITHUB_REGEX.matchEntire(raw) ?: RAW_GH_REGEX.matchEntire(raw)
-		if (gh != null) {
-			return gh.groupValues[1] to gh.groupValues[2]
-		}
-		val stripped = raw.removePrefix("https://").removePrefix("http://")
-			.removePrefix("raw.githubusercontent.com/").removePrefix("github.com/").removePrefix("www.github.com/")
-			.removePrefix("cdn.jsdelivr.net/gh/")
-		val parts = stripped.split('/').filter { it.isNotBlank() }
-		if (parts.size >= 2 && !parts[0].contains(':')) {
+			?: JSDELIVR_GH_REGEX.matchEntire(raw)
+		if (gh != null) return gh.groupValues[1] to gh.groupValues[2]
+		if (raw.startsWith("http://", true) || raw.startsWith("https://", true)) return null
+		val parts = raw.split('/').filter { it.isNotBlank() }
+		if (parts.size >= 2 && !parts[0].contains('.') && !parts[0].contains(':')) {
 			val owner = parts[0]
 			val repo = parts[1].substringBefore('@').removeSuffix(".git")
 			return owner to repo
@@ -502,23 +501,29 @@ class ExtensionProvider(
 	}.getOrDefault(emptyList())
 
 	@OptIn(ExperimentalSerializationApi::class)
-	private fun parsePb(bytes: ByteArray, repoUrl: String, depth: Int = 0): List<ExtArtifact> = runCatching {
+	private fun parsePb(bytes: ByteArray, repo: String, depth: Int = 0, input: String? = null): List<ExtArtifact> = runCatching {
 		if (depth > 3) return@runCatching emptyList()
-		val index = ProtoBuf.decodeFromByteArray<IndexPb>(bytes)
-		val baseRepoUrl = repoUrl.substringBeforeLast('/')
-		if (index.extensionListUrl != null) {
+		val bytes = bytes.gunzip()
+		val index = runCatching { ProtoBuf.decodeFromByteArray<IndexPb>(bytes) }.getOrNull()
+		index?.name?.takeIf { it.isNotBlank() }?.let { name ->
+			input?.let { setRepositoryName(it, name) }; setRepositoryName(repo, name)
+		}
+		val baseRepoUrl = repo.substringBeforeLast('/')
+		if (index?.extensionListUrl != null) {
 			val resolved = index.extensionListUrl.resolveUrl(baseRepoUrl)
 				?: return@runCatching emptyList()
 			val request = Request.Builder().url(resolved)
-				.header("Accept", "application/octet-stream")
+				.header("Accept", "application/octet-stream, */*")
 				.header("User-Agent", UserAgents.KOTATSU)
 				.build()
 			return@runCatching client.newCall(request).execute().use { res ->
 				if (!res.isSuccessful) emptyList()
-				else parsePb(res.body.bytes(), repoUrl, depth + 1)
+				else parsePb(res.body.bytes(), repo, depth + 1, input)
 			}
 		}
-		val extensions = index.extensionList?.extensions ?: emptyList()
+		val extensions = index?.extensionList?.extensions ?: runCatching {
+			ProtoBuf.decodeFromByteArray<ExtensionListPb>(bytes).extensions
+		}.getOrNull() ?: emptyList()
 		extensions.mapNotNullTo(ArrayList(extensions.size)) { ext ->
 			val pkg = ext.packageName ?: return@mapNotNullTo null
 			val lib = ext.extensionLib?.toDoubleOrNull()
@@ -538,7 +543,7 @@ class ExtensionProvider(
 				)
 			}
 			ExtArtifact(
-				repositoryUrl = repoUrl,
+				repositoryUrl = repo,
 				name = ext.name ?: pkg,
 				packageName = pkg,
 				jarUrl = jar,
@@ -555,11 +560,19 @@ class ExtensionProvider(
 
 	private companion object {
 		val GITHUB_REGEX = Regex("(?i)^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+?)(?:/.*)?$")
-		val RAW_GH_REGEX = Regex("(?i)^https?://raw\\.githubusercontent\\.com/([^/]+)/([^/]+)/[^/]+/index\\.json$")
+		val RAW_GH_REGEX = Regex("(?i)^https?://raw\\.githubusercontent\\.com/([^/]+)/([^/]+?)(?:/.*)?$")
+		val JSDELIVR_GH_REGEX = Regex("(?i)^https?://cdn\\.jsdelivr\\.net/gh/([^/]+)/([^/@]+?)(?:[@/].*)?$")
 
 		private fun String?.resolveUrl(base: String): String? {
 			val u = this?.takeIf { it.isNotBlank() } ?: return null
 			return if (u.startsWith("http://", true) || u.startsWith("https://", true)) u else "$base/$u"
 		}
+
+		private fun ByteArray.gunzip(): ByteArray =
+			if (size >= 2 && this[0] == 0x1f.toByte() && this[1] == 0x8b.toByte()) {
+				runCatching { GZIPInputStream(inputStream()).use { it.readBytes() } }.getOrDefault(this)
+			} else this
+
+		private fun String.isPb(): Boolean = this.endsWith(".pb", true)
 	}
 }
