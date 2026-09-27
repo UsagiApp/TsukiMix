@@ -7,16 +7,23 @@ import android.util.Base64
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.protobuf.ProtoBuf
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
 import org.draken.tsukimix.core.parser.external.model.ExtSource
 import org.draken.tsukimix.core.parser.external.model.ExtArtifact
 import org.draken.tsukimix.core.parser.external.model.contentTypeFromCatalog
-import org.json.JSONArray
-import org.json.JSONObject
+import org.draken.tsukimix.core.parser.external.model.IndexPb
+import org.draken.tsukimix.core.parser.external.model.ExtensionListPb
+import tsuki.network.UserAgents
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 
 class ExtensionProvider(
 	context: Context,
@@ -155,12 +162,13 @@ class ExtensionProvider(
 		}
 		for (url in urls) {
 			val request = Request.Builder().url(url)
-				.header("Accept", "application/json")
-				.header("User-Agent", "Usagi/1.0")
+				.header("Accept", if (url.isPb()) "application/octet-stream, */*" else "application/json")
+				.header("User-Agent", UserAgents.KOTATSU)
 				.build()
 			val result = runCatching {
 				client.newCall(request).execute().use { res ->
 					if (!res.isSuccessful) return@use emptyList()
+					if (url.isPb()) return@use parsePb(res.body.bytes(), url, input = input)
 					val rawBody = res.body.string()
 					val body = decodeBody(url, rawBody)
 					val trimmed = body.removePrefix("\uFEFF").trim()
@@ -172,7 +180,7 @@ class ExtensionProvider(
 							setRepositoryName(input, repoName)
 						}
 						val indexV2 = obj?.optString("index_v2")?.takeIf { it.isNotBlank() }
-						if (indexV2 != null && !indexV2.endsWith(".pb", true)) {
+						if (indexV2 != null) {
 							val v2Result = load(indexV2)
 							if (v2Result.isNotEmpty() && !isDummyCatalog(v2Result)) return@use v2Result
 						}
@@ -318,14 +326,11 @@ class ExtensionProvider(
 			return null
 		}
 		val gh = GITHUB_REGEX.matchEntire(raw) ?: RAW_GH_REGEX.matchEntire(raw)
-		if (gh != null) {
-			return gh.groupValues[1] to gh.groupValues[2]
-		}
-		val stripped = raw.removePrefix("https://").removePrefix("http://")
-			.removePrefix("raw.githubusercontent.com/").removePrefix("github.com/").removePrefix("www.github.com/")
-			.removePrefix("cdn.jsdelivr.net/gh/")
-		val parts = stripped.split('/').filter { it.isNotBlank() }
-		if (parts.size >= 2 && !parts[0].contains(':')) {
+			?: JSDELIVR_GH_REGEX.matchEntire(raw)
+		if (gh != null) return gh.groupValues[1] to gh.groupValues[2]
+		if (raw.startsWith("http://", true) || raw.startsWith("https://", true)) return null
+		val parts = raw.split('/').filter { it.isNotBlank() }
+		if (parts.size >= 2 && !parts[0].contains('.') && !parts[0].contains(':')) {
 			val owner = parts[0]
 			val repo = parts[1].substringBefore('@').removeSuffix(".git")
 			return owner to repo
@@ -359,7 +364,7 @@ class ExtensionProvider(
 				if (repoName == baseRepo) "$baseRepo-sources" else repoName,
 			).distinct()
 			val branches = listOf("repo", "main", "master", "gh-pages")
-			val files = listOf("index.json", "index.min.json", "repo.json")
+			val files = listOf("index.json", "index.min.json", "repo.json", "index.pb")
 			val list = mutableListOf<String>()
 			if (raw.startsWith("http://") || raw.startsWith("https://")) {
 				list.add(raw)
@@ -393,10 +398,16 @@ class ExtensionProvider(
 					list.add(raw.replace("/repo.json", "/index.json"))
 					list.add(raw.replace("/repo.json", "/index.min.json"))
 				}
+				raw.endsWith("/index.pb") -> {
+					list.add(raw.replace("/index.pb", "/index.json"))
+					list.add(raw.replace("/index.pb", "/index.min.json"))
+					list.add(raw.replace("/index.pb", "/repo.json"))
+				}
 				else -> {
 					list.add("$raw/index.json")
 					list.add("$raw/index.min.json")
 					list.add("$raw/repo.json")
+					list.add("$raw/index.pb")
 				}
 			}
 			return list.distinct()
@@ -489,8 +500,79 @@ class ExtensionProvider(
 		}
 	}.getOrDefault(emptyList())
 
+	@OptIn(ExperimentalSerializationApi::class)
+	private fun parsePb(bytes: ByteArray, repo: String, depth: Int = 0, input: String? = null): List<ExtArtifact> = runCatching {
+		if (depth > 3) return@runCatching emptyList()
+		val bytes = bytes.gunzip()
+		val index = runCatching { ProtoBuf.decodeFromByteArray<IndexPb>(bytes) }.getOrNull()
+		index?.name?.takeIf { it.isNotBlank() }?.let { name ->
+			input?.let { setRepositoryName(it, name) }; setRepositoryName(repo, name)
+		}
+		val baseRepoUrl = repo.substringBeforeLast('/')
+		if (index?.extensionListUrl != null) {
+			val resolved = index.extensionListUrl.resolveUrl(baseRepoUrl)
+				?: return@runCatching emptyList()
+			val request = Request.Builder().url(resolved)
+				.header("Accept", "application/octet-stream, */*")
+				.header("User-Agent", UserAgents.KOTATSU)
+				.build()
+			return@runCatching client.newCall(request).execute().use { res ->
+				if (!res.isSuccessful) emptyList()
+				else parsePb(res.body.bytes(), repo, depth + 1, input)
+			}
+		}
+		val extensions = index?.extensionList?.extensions ?: runCatching {
+			ProtoBuf.decodeFromByteArray<ExtensionListPb>(bytes).extensions
+		}.getOrNull() ?: emptyList()
+		extensions.mapNotNullTo(ArrayList(extensions.size)) { ext ->
+			val pkg = ext.packageName ?: return@mapNotNullTo null
+			val lib = ext.extensionLib?.toDoubleOrNull()
+			val rawNsfw = ext.contentWarning?.name
+			val type = contentTypeFromCatalog(rawNsfw, lib)
+			val apk = ext.resources?.apkUrl.resolveUrl(baseRepoUrl)
+			val jar = ext.resources?.jarUrl.resolveUrl(baseRepoUrl)
+			val icon = ext.resources?.iconUrl.resolveUrl(baseRepoUrl) ?: "$baseRepoUrl/icon/$pkg.png"
+			val sources = ext.sources.mapNotNullTo(ArrayList(ext.sources.size)) { src ->
+				val id = src.id ?: return@mapNotNullTo null
+				ExtSource(
+					id = id,
+					name = src.name ?: pkg,
+					language = src.language ?: "all",
+					homeUrl = src.homeUrl?.takeIf { it.isNotBlank() },
+					contentType = type,
+				)
+			}
+			ExtArtifact(
+				repositoryUrl = repo,
+				name = ext.name ?: pkg,
+				packageName = pkg,
+				jarUrl = jar,
+				apkUrl = apk,
+				iconUrl = icon,
+				extensionLib = lib,
+				versionCode = ext.versionCode,
+				versionName = ext.versionName,
+				contentType = type,
+				sources = sources,
+			)
+		}
+	}.getOrDefault(emptyList())
+
 	private companion object {
 		val GITHUB_REGEX = Regex("(?i)^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+?)(?:/.*)?$")
-		val RAW_GH_REGEX = Regex("(?i)^https?://raw\\.githubusercontent\\.com/([^/]+)/([^/]+)/[^/]+/index\\.json$")
+		val RAW_GH_REGEX = Regex("(?i)^https?://raw\\.githubusercontent\\.com/([^/]+)/([^/]+?)(?:/.*)?$")
+		val JSDELIVR_GH_REGEX = Regex("(?i)^https?://cdn\\.jsdelivr\\.net/gh/([^/]+)/([^/@]+?)(?:[@/].*)?$")
+
+		private fun String?.resolveUrl(base: String): String? {
+			val u = this?.takeIf { it.isNotBlank() } ?: return null
+			return if (u.startsWith("http://", true) || u.startsWith("https://", true)) u else "$base/$u"
+		}
+
+		private fun ByteArray.gunzip(): ByteArray =
+			if (size >= 2 && this[0] == 0x1f.toByte() && this[1] == 0x8b.toByte()) {
+				runCatching { GZIPInputStream(inputStream()).use { it.readBytes() } }.getOrDefault(this)
+			} else this
+
+		private fun String.isPb(): Boolean = this.endsWith(".pb", true)
 	}
 }
