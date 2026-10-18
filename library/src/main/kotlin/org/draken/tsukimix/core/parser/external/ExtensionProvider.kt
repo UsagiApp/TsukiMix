@@ -6,19 +6,21 @@ import android.content.Context
 import android.util.Base64
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.protobuf.ProtoBuf
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.draken.tsukimix.core.parser.external.model.ExtArtifact
+import org.draken.tsukimix.core.parser.external.model.ExtSource
+import org.draken.tsukimix.core.parser.external.model.ExtensionListPb
+import org.draken.tsukimix.core.parser.external.model.IndexPb
+import org.draken.tsukimix.core.parser.external.model.contentTypeFromCatalog
 import org.json.JSONArray
 import org.json.JSONObject
-import org.draken.tsukimix.core.parser.external.model.ExtSource
-import org.draken.tsukimix.core.parser.external.model.ExtArtifact
-import org.draken.tsukimix.core.parser.external.model.contentTypeFromCatalog
-import org.draken.tsukimix.core.parser.external.model.IndexPb
-import org.draken.tsukimix.core.parser.external.model.ExtensionListPb
 import tsuki.network.UserAgents
 import java.io.File
 import java.security.MessageDigest
@@ -33,7 +35,8 @@ class ExtensionProvider(
 	private val prefs by lazy { appContext.getSharedPreferences("tachiyomi_catalogs", Context.MODE_PRIVATE) }
 	private val cacheDir by lazy { File(appContext.filesDir, "tachiyomi-catalog-cache").also { it.mkdirs() } }
 	private val client by lazy {
-		httpClient.newBuilder()
+		httpClient
+			.newBuilder()
 			.connectTimeout(5, TimeUnit.SECONDS)
 			.readTimeout(8, TimeUnit.SECONDS)
 			.followRedirects(true)
@@ -77,7 +80,10 @@ class ExtensionProvider(
 			}
 	}
 
-	fun setRepositoryName(input: String, name: String?) {
+	fun setRepositoryName(
+		input: String,
+		name: String?,
+	) {
 		val key = canonicalKey(input)
 		val url = normalizeUrl(input) ?: input.trim().removeSuffix("/")
 		val names = runCatching { JSONObject(prefs.getString("repository_names", "{}").orEmpty()) }.getOrElse { JSONObject() }
@@ -85,7 +91,12 @@ class ExtensionProvider(
 			names.remove(key)
 			names.remove(url)
 			names.remove(input.trim().removeSuffix("/"))
-			val keysToRemove = names.keys().asSequence().filter { canonicalKey(it) == key }.toList()
+			val keysToRemove =
+				names
+					.keys()
+					.asSequence()
+					.filter { canonicalKey(it) == key }
+					.toList()
 			keysToRemove.forEach { names.remove(it) }
 		} else {
 			names.put(key, name.trim())
@@ -101,18 +112,25 @@ class ExtensionProvider(
 		cacheFile(raw).delete()
 		cacheFile(url).delete()
 		val currentRepos = prefs.getStringSet("repositories", emptySet()).orEmpty()
-		val toRemove = currentRepos.filter {
-			val itRaw = it.trim().removeSuffix("/")
-			itRaw == raw ||
-				(normalizeUrl(it) ?: itRaw) == url ||
-				canonicalKey(it) == key
-		}.toSet()
+		val toRemove =
+			currentRepos
+				.filter {
+					val itRaw = it.trim().removeSuffix("/")
+					itRaw == raw ||
+						(normalizeUrl(it) ?: itRaw) == url ||
+						canonicalKey(it) == key
+				}.toSet()
 		toRemove.forEach { cacheFile(it).delete() }
 		val names = runCatching { JSONObject(prefs.getString("repository_names", "{}").orEmpty()) }.getOrElse { JSONObject() }
 		names.remove(url)
 		names.remove(raw)
 		names.remove(key)
-		val keysToRemove = names.keys().asSequence().filter { canonicalKey(it) == key }.toList()
+		val keysToRemove =
+			names
+				.keys()
+				.asSequence()
+				.filter { canonicalKey(it) == key }
+				.toList()
 		keysToRemove.forEach { names.remove(it) }
 		prefs.edit {
 			putStringSet("repositories", currentRepos - toRemove - raw - url)
@@ -120,13 +138,15 @@ class ExtensionProvider(
 		}
 	}
 
-	fun ignorePackage(pkg: String) = prefs.edit {
-		putStringSet("ignored_packages", prefs.getStringSet("ignored_packages", emptySet()).orEmpty() + pkg)
-	}
+	fun ignorePackage(pkg: String) =
+		prefs.edit {
+			putStringSet("ignored_packages", prefs.getStringSet("ignored_packages", emptySet()).orEmpty() + pkg)
+		}
 
-	fun restorePackage(pkg: String) = prefs.edit {
-		putStringSet("ignored_packages", prefs.getStringSet("ignored_packages", emptySet()).orEmpty() - pkg)
-	}
+	fun restorePackage(pkg: String) =
+		prefs.edit {
+			putStringSet("ignored_packages", prefs.getStringSet("ignored_packages", emptySet()).orEmpty() - pkg)
+		}
 
 	fun getSavedRepositories(): Set<String> {
 		val current = prefs.getStringSet("repositories", emptySet()).orEmpty()
@@ -140,123 +160,153 @@ class ExtensionProvider(
 		return map.values.toSet()
 	}
 
-	suspend fun loadSavedCached(): List<ExtArtifact> = withContext(Dispatchers.IO) {
-		val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
-		getSavedRepositories()
-			.flatMap(::readCachedArtifacts)
-			.filterNot { it.packageName in ignored }
-	}
-
-	suspend fun loadSaved(): List<ExtArtifact> = withContext(Dispatchers.IO) {
-		val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
-		getSavedRepositories()
-			.flatMap { url -> load(url).ifEmpty { readCachedArtifacts(url) } }
-			.filterNot { it.packageName in ignored }
-	}
-
-	suspend fun load(input: String): List<ExtArtifact> = withContext(Dispatchers.IO) {
-		val urls = candidateUrls(input)
-		if (urls.isEmpty()) {
-			lastLoadError = "Invalid repository URL"
-			return@withContext emptyList()
+	suspend fun loadSavedCached(): List<ExtArtifact> =
+		withContext(Dispatchers.IO) {
+			val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
+			getSavedRepositories()
+				.flatMap(::readCachedArtifacts)
+				.filterNot { it.packageName in ignored }
 		}
-		for (url in urls) {
-			val request = Request.Builder().url(url)
+
+	suspend fun loadSaved(): List<ExtArtifact> =
+		withContext(Dispatchers.IO) {
+			val ignored = prefs.getStringSet("ignored_packages", emptySet()).orEmpty()
+			getSavedRepositories()
+				.flatMap { url -> load(url).ifEmpty { readCachedArtifacts(url) } }
+				.filterNot { it.packageName in ignored }
+		}
+
+	suspend fun load(input: String): List<ExtArtifact> =
+		withContext(Dispatchers.IO) {
+			val urls = candidateUrls(input)
+			if (urls.isEmpty()) {
+				lastLoadError = "Invalid repository URL"
+				return@withContext emptyList()
+			}
+			for (batch in urls.chunked(4)) {
+				val deferreds = batch.map { url -> async { fetchAndParse(url, input) } }
+				val results = deferreds.awaitAll()
+				val result = results.firstOrNull { it.isNotEmpty() && !isDummyCatalog(it) }
+				if (result != null) {
+					writeCachedArtifacts(input, result)
+					val normalized = normalizeUrl(input)
+					if (normalized != null && normalized != input) {
+						writeCachedArtifacts(normalized, result)
+					}
+					lastLoadError = null
+					return@withContext result
+				}
+			}
+			lastLoadError = "Failed to load catalog from $input"
+			emptyList()
+		}
+
+	private fun fetchAndParse(
+		url: String,
+		input: String,
+	): List<ExtArtifact> {
+		val request =
+			Request
+				.Builder()
+				.url(url)
 				.header("Accept", if (url.isPb()) "application/octet-stream, */*" else "application/json")
 				.header("User-Agent", UserAgents.KOTATSU)
 				.build()
-			val result = runCatching {
-				client.newCall(request).execute().use { res ->
-					if (!res.isSuccessful) return@use emptyList()
-					if (url.isPb()) return@use parsePb(res.body.bytes(), url, input = input)
-					val rawBody = res.body.string()
-					val body = decodeBody(url, rawBody)
-					val trimmed = body.removePrefix("\uFEFF").trim()
-					if (trimmed.startsWith("{")) {
-						val obj = runCatching { JSONObject(trimmed) }.getOrNull()
-						val meta = obj?.optJSONObject("meta")
-						val repoName = meta?.optString("name")?.takeIf { it.isNotBlank() }
-						if (repoName != null) {
-							setRepositoryName(input, repoName)
-						}
-						val indexV2 = obj?.optString("index_v2")?.takeIf { it.isNotBlank() }
-						if (indexV2 != null) {
-							val v2Result = load(indexV2)
-							if (v2Result.isNotEmpty() && !isDummyCatalog(v2Result)) return@use v2Result
-						}
-						if (url.endsWith("/repo.json")) {
-							for (compUrl in listOf(
-								url.replace("/repo.json", "/index.json"),
-								url.replace("/repo.json", "/index.min.json")
-							)) {
-								val companionResult = runCatching {
-									val req = Request.Builder().url(compUrl)
-										.header("Accept", "application/json")
-										.header("User-Agent", "Usagi/1.0")
-										.build()
+		return runCatching {
+			client.newCall(request).execute().use { res ->
+				if (!res.isSuccessful) return@use emptyList()
+				if (url.isPb()) return@use parsePb(res.body.bytes(), url, input = input)
+				val rawBody = res.body.string()
+				val body = decodeBody(url, rawBody)
+				val trimmed = body.removePrefix("\uFEFF").trim()
+				if (trimmed.startsWith("{")) {
+					val obj = runCatching { JSONObject(trimmed) }.getOrNull()
+					val meta = obj?.optJSONObject("meta")
+					val repoName = meta?.optString("name")?.takeIf { it.isNotBlank() }
+					if (repoName != null) {
+						setRepositoryName(input, repoName)
+					}
+					val indexV2 = obj?.optString("index_v2")?.takeIf { it.isNotBlank() }
+					if (indexV2 != null) {
+						val v2Result = fetchAndParse(indexV2, input)
+						if (v2Result.isNotEmpty() && !isDummyCatalog(v2Result)) return@use v2Result
+					}
+					if (url.endsWith("/repo.json")) {
+						for (compUrl in listOf(
+							url.replace("/repo.json", "/index.min.json"),
+							url.replace("/repo.json", "/index.json"),
+						)) {
+							val companionResult =
+								runCatching {
+									val req =
+										Request
+											.Builder()
+											.url(compUrl)
+											.header("Accept", "application/json")
+											.header("User-Agent", UserAgents.KOTATSU)
+											.build()
 									client.newCall(req).execute().use { compRes ->
 										if (compRes.isSuccessful) parse(compUrl, decodeBody(compUrl, compRes.body.string())) else emptyList()
 									}
 								}.getOrDefault(emptyList())
-								if (companionResult.isNotEmpty() && !isDummyCatalog(companionResult)) return@use companionResult
-							}
+							if (companionResult.isNotEmpty() && !isDummyCatalog(companionResult)) return@use companionResult
 						}
 					}
-					parse(url, body)
 				}
-			}.getOrDefault(emptyList())
-
-			if (result.isNotEmpty() && !isDummyCatalog(result)) {
-				writeCachedArtifacts(input, result)
-				val normalized = normalizeUrl(input)
-				if (normalized != null && normalized != input) {
-					writeCachedArtifacts(normalized, result)
-				}
-				lastLoadError = null
-				return@withContext result
+				parse(url, body)
 			}
-		}
-		lastLoadError = "Failed to load catalog from $input"
-		emptyList()
+		}.getOrDefault(emptyList())
 	}
 
 	private fun isDummyCatalog(artifacts: List<ExtArtifact>): Boolean =
-		artifacts.isNotEmpty() && artifacts.all { it.name.contains("Outdated App", true) || it.name.contains("Update to Mihon", true) }
+		artifacts.isNotEmpty() &&
+			artifacts.all { it.name.contains("Outdated App", true) || it.name.contains("Update to Mihon", true) }
 
 	private fun cacheFile(url: String): File {
 		val hash = MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) }
 		return File(cacheDir, "$hash.json")
 	}
 
-	private fun writeCachedArtifacts(url: String, artifacts: List<ExtArtifact>) = runCatching {
-		val array = JSONArray(artifacts.map { art ->
-			JSONObject().apply {
-				put("name", art.name)
-				put("packageName", art.packageName)
-				put("jarUrl", art.jarUrl)
-				put("apkUrl", art.apkUrl)
-				put("iconUrl", art.iconUrl)
-				put("extensionLib", art.extensionLib)
-				put("versionCode", art.versionCode)
-				put("versionName", art.versionName)
-				put("contentWarning", if (art.isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
-				put("contentType", art.contentType.name)
-				put("isNsfw", art.isNsfw)
-				put("nsfw", if (art.isNsfw) 1 else 0)
-				put("sources", JSONArray(art.sources.map { s ->
+	private fun writeCachedArtifacts(
+		url: String,
+		artifacts: List<ExtArtifact>,
+	) = runCatching {
+		val array =
+			JSONArray(
+				artifacts.map { art ->
 					JSONObject().apply {
-						put("id", s.id)
-						put("name", s.name)
-						put("language", s.language)
-						put("homeUrl", s.homeUrl)
-						put("contentWarning", if (s.isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
-						put("contentType", s.contentType.name)
-						put("isNsfw", s.isNsfw)
-						put("nsfw", if (s.isNsfw) 1 else 0)
+						put("name", art.name)
+						put("packageName", art.packageName)
+						put("jarUrl", art.jarUrl)
+						put("apkUrl", art.apkUrl)
+						put("iconUrl", art.iconUrl)
+						put("extensionLib", art.extensionLib)
+						put("versionCode", art.versionCode)
+						put("versionName", art.versionName)
+						put("contentWarning", if (art.isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
+						put("contentType", art.contentType.name)
+						put("isNsfw", art.isNsfw)
+						put("nsfw", if (art.isNsfw) 1 else 0)
+						put(
+							"sources",
+							JSONArray(
+								art.sources.map { s ->
+									JSONObject().apply {
+										put("id", s.id)
+										put("name", s.name)
+										put("language", s.language)
+										put("homeUrl", s.homeUrl)
+										put("contentWarning", if (s.isNsfw) "CONTENT_WARNING_NSFW" else "CONTENT_WARNING_SAFE")
+										put("contentType", s.contentType.name)
+										put("isNsfw", s.isNsfw)
+										put("nsfw", if (s.isNsfw) 1 else 0)
+									}
+								},
+							),
+						)
 					}
-				}))
-			}
-		})
+				},
+			)
 		cacheFile(url).writeText(JSONObject().put("repositoryUrl", url).put("artifacts", array).toString())
 	}
 
@@ -270,34 +320,41 @@ class ExtensionProvider(
 		return emptyList()
 	}
 
-	private fun parseCachedFile(file: File, key: String): List<ExtArtifact> {
+	private fun parseCachedFile(
+		file: File,
+		key: String,
+	): List<ExtArtifact> {
 		return runCatching {
 			val root = JSONObject(file.readText())
 			val arr = root.optJSONArray("artifacts") ?: return emptyList()
 			(0 until arr.length()).mapNotNull { i ->
 				val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-				val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() }
-					?: return@mapNotNull null
+				val pkg =
+					obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() }
+						?: return@mapNotNull null
 				val lib = obj.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
-				val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating")
-					?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
+				val rawNsfw =
+					obj.opt("contentWarning") ?: obj.opt("contentRating")
+						?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
 				val type = contentTypeFromCatalog(rawNsfw, lib)
 				val srcArr = obj.optJSONArray("sources")
-				val sources = (0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
-					val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
-					val id = s.optLong("id").takeIf { it != 0L } ?: return@mapNotNull null
-					val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType")
-						?: s.opt("isNsfw") ?: s.opt("nsfw")
-					val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
-					ExtSource(
-						id,
-						s.optString("name", pkg),
-						s.optString("language", "all").ifBlank { s.optString("lang", "all") },
-						s.optString("homeUrl").takeIf { it.isNotBlank() }
-							?: s.optString("baseUrl").takeIf { it.isNotBlank() },
-						sType,
-					)
-				}
+				val sources =
+					(0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
+						val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
+						val id = s.optLong("id").takeIf { it != 0L } ?: return@mapNotNull null
+						val sRawNsfw =
+							s.opt("contentWarning") ?: s.opt("contentRating") ?: s.opt("contentType")
+								?: s.opt("isNsfw") ?: s.opt("nsfw")
+						val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
+						ExtSource(
+							id,
+							s.optString("name", pkg),
+							s.optString("language", "all").ifBlank { s.optString("lang", "all") },
+							s.optString("homeUrl").takeIf { it.isNotBlank() }
+								?: s.optString("baseUrl").takeIf { it.isNotBlank() },
+							sType,
+						)
+					}
 				ExtArtifact(
 					root.optString("repositoryUrl", key),
 					obj.optString("name", pkg),
@@ -325,8 +382,9 @@ class ExtensionProvider(
 		) {
 			return null
 		}
-		val gh = GITHUB_REGEX.matchEntire(raw) ?: RAW_GH_REGEX.matchEntire(raw)
-			?: JSDELIVR_GH_REGEX.matchEntire(raw)
+		val gh =
+			GITHUB_REGEX.matchEntire(raw) ?: RAW_GH_REGEX.matchEntire(raw)
+				?: JSDELIVR_GH_REGEX.matchEntire(raw)
 		if (gh != null) return gh.groupValues[1] to gh.groupValues[2]
 		if (raw.startsWith("http://", true) || raw.startsWith("https://", true)) return null
 		val parts = raw.split('/').filter { it.isNotBlank() }
@@ -343,7 +401,7 @@ class ExtensionProvider(
 		if (pair != null) {
 			val owner = pair.first
 			val repo = pair.second.removeSuffix("-source").removeSuffix("-sources")
-			return "https://raw.githubusercontent.com/$owner/$repo/repo/index.json"
+			return "https://raw.githubusercontent.com/$owner/$repo/repo/index.min.json"
 		}
 		val raw = input.trim().removeSuffix("/")
 		return if (raw.startsWith("http://") || raw.startsWith("https://")) raw else null
@@ -357,27 +415,24 @@ class ExtensionProvider(
 
 		if (owner != null && repoName != null) {
 			val baseRepo = repoName.removeSuffix("-source").removeSuffix("-sources")
-			val repos = listOf(
-				repoName,
-				baseRepo,
-				if (repoName == baseRepo) "$baseRepo-source" else repoName,
-				if (repoName == baseRepo) "$baseRepo-sources" else repoName,
-			).distinct()
-			val branches = listOf("repo", "main", "master", "gh-pages")
-			val files = listOf("index.json", "index.min.json", "repo.json", "index.pb")
+			val repos = listOfNotNull(repoName, baseRepo.takeIf { it != repoName }).distinct()
+			val branches = listOf("repo", "gh-pages", "main", "master")
+			val files = listOf("index.min.json", "index.json", "repo.json", "index.pb")
 			val list = mutableListOf<String>()
-			if (raw.startsWith("http://") || raw.startsWith("https://")) {
+			if ((raw.startsWith("http://") || raw.startsWith("https://")) &&
+				(raw.endsWith(".json", true) || raw.endsWith(".pb", true))
+			) {
 				list.add(raw)
 			}
 			for (r in repos) {
 				for (b in branches) {
 					for (f in files) {
 						list.add("https://raw.githubusercontent.com/$owner/$r/$b/$f")
-						list.add("https://cdn.jsdelivr.net/gh/$owner/$r@$b/$f")
 					}
 				}
 				for (f in files) {
 					list.add("https://$owner.github.io/$r/$f")
+					list.add("https://github.com/$owner/$r/releases/latest/download/$f")
 				}
 			}
 			return list.distinct()
@@ -386,26 +441,30 @@ class ExtensionProvider(
 		if (raw.startsWith("http://") || raw.startsWith("https://")) {
 			val list = mutableListOf(raw)
 			when {
-				raw.endsWith("/index.json") -> {
-					list.add(raw.replace("/index.json", "/index.min.json"))
-					list.add(raw.replace("/index.json", "/repo.json"))
-				}
 				raw.endsWith("/index.min.json") -> {
 					list.add(raw.replace("/index.min.json", "/index.json"))
 					list.add(raw.replace("/index.min.json", "/repo.json"))
 				}
-				raw.endsWith("/repo.json") -> {
-					list.add(raw.replace("/repo.json", "/index.json"))
-					list.add(raw.replace("/repo.json", "/index.min.json"))
+
+				raw.endsWith("/index.json") -> {
+					list.add(raw.replace("/index.json", "/index.min.json"))
+					list.add(raw.replace("/index.json", "/repo.json"))
 				}
+
+				raw.endsWith("/repo.json") -> {
+					list.add(raw.replace("/repo.json", "/index.min.json"))
+					list.add(raw.replace("/repo.json", "/index.json"))
+				}
+
 				raw.endsWith("/index.pb") -> {
-					list.add(raw.replace("/index.pb", "/index.json"))
 					list.add(raw.replace("/index.pb", "/index.min.json"))
+					list.add(raw.replace("/index.pb", "/index.json"))
 					list.add(raw.replace("/index.pb", "/repo.json"))
 				}
+
 				else -> {
-					list.add("$raw/index.json")
 					list.add("$raw/index.min.json")
+					list.add("$raw/index.json")
 					list.add("$raw/repo.json")
 					list.add("$raw/index.pb")
 				}
@@ -415,148 +474,184 @@ class ExtensionProvider(
 		return emptyList()
 	}
 
-	private fun decodeBody(url: String, body: String): String {
+	private fun decodeBody(
+		url: String,
+		body: String,
+	): String {
 		if (!url.startsWith("https://api.github.com/repos/")) return body
 		val content = runCatching { JSONObject(body).optString("content").filterNot(Char::isWhitespace) }.getOrNull()
 		return if (!content.isNullOrBlank()) Base64.decode(content, Base64.DEFAULT).toString(Charsets.UTF_8) else body
 	}
 
-	private fun parse(repoUrl: String, body: String): List<ExtArtifact> = runCatching {
-		val trimmed = body.removePrefix("\uFEFF").trim()
-		val arr = when {
-			trimmed.startsWith("[") -> JSONArray(trimmed)
-			else -> {
-				val root = JSONObject(trimmed)
-				root.optJSONObject("extensionList")?.optJSONArray("extensions")
-					?: root.optJSONArray("extensions")
-					?: root.optJSONArray("extensionList")
-					?: JSONArray()
-			}
-		}
-		val baseRepoUrl = repoUrl.substringBeforeLast('/')
-		(0 until arr.length()).mapNotNull { i ->
-			val obj = arr.optJSONObject(i) ?: return@mapNotNull null
-			val pkg = obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() }
-				?: return@mapNotNull null
-			val res = obj.optJSONObject("resources")
-			val name = obj.optString("name", pkg)
-			val lib = obj.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
-				?: obj.optDouble("libVersion", Double.NaN).takeUnless { it.isNaN() }
+	private fun parse(
+		repoUrl: String,
+		body: String,
+	): List<ExtArtifact> =
+		runCatching {
+			val trimmed = body.removePrefix("\uFEFF").trim()
+			val arr =
+				when {
+					trimmed.startsWith("[") -> {
+						JSONArray(trimmed)
+					}
 
-			val rawNsfw = obj.opt("contentWarning") ?: obj.opt("contentRating")
-				?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
-			val type = contentTypeFromCatalog(rawNsfw, lib)
+					else -> {
+						val root = JSONObject(trimmed)
+						root.optJSONObject("extensionList")?.optJSONArray("extensions")
+							?: root.optJSONArray("extensions")
+							?: root.optJSONArray("extensionList")
+							?: JSONArray()
+					}
+				}
+			val baseRepoUrl = repoUrl.substringBeforeLast('/')
+			(0 until arr.length()).mapNotNull { i ->
+				val obj = arr.optJSONObject(i) ?: return@mapNotNull null
+				val pkg =
+					obj.optString("pkg").ifBlank { obj.optString("packageName") }.takeIf { it.isNotBlank() }
+						?: return@mapNotNull null
+				val res = obj.optJSONObject("resources")
+				val name = obj.optString("name", pkg)
+				val lib =
+					obj.optDouble("extensionLib", Double.NaN).takeUnless { it.isNaN() }
+						?: obj.optDouble("libVersion", Double.NaN).takeUnless { it.isNaN() }
 
-			val apkRaw = obj.optString("apk").ifBlank { obj.optString("apkUrl") }.ifBlank { res?.optString("apkUrl").orEmpty() }
-			val apkUrl = when {
-				apkRaw.isBlank() -> null
-				apkRaw.startsWith("http://") || apkRaw.startsWith("https://") -> apkRaw
-				else -> "$baseRepoUrl/apk/$apkRaw"
-			}
-			val jarRaw = obj.optString("jar").ifBlank { obj.optString("jarUrl") }.ifBlank { res?.optString("jarUrl").orEmpty() }
-			val jarUrl = when {
-				jarRaw.isBlank() -> null
-				jarRaw.startsWith("http://") || jarRaw.startsWith("https://") -> jarRaw
-				else -> "$baseRepoUrl/jar/$jarRaw"
-			}
-			val iconRaw = obj.optString("iconUrl").ifBlank { res?.optString("iconUrl").orEmpty() }
-			val iconUrl = when {
-				iconRaw.isNotBlank() -> iconRaw
-				else -> "$baseRepoUrl/icon/$pkg.png"
-			}
-			val code = obj.optLong("code", -1L).takeIf { it != -1L }
-				?: obj.optLong("versionCode", -1L).takeIf { it != -1L }
-				?: obj.optString("versionCode").toLongOrNull()
-			val versionName = obj.optString("version").ifBlank { obj.optString("versionName") }.takeIf { it.isNotBlank() }
+				val rawNsfw =
+					obj.opt("contentWarning") ?: obj.opt("contentRating")
+						?: obj.opt("contentType") ?: obj.opt("isNsfw") ?: obj.opt("nsfw")
+				val type = contentTypeFromCatalog(rawNsfw, lib)
 
-			val srcArr = obj.optJSONArray("sources")
-			val sources = (0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
-				val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
-				val id = s.optLong("id", 0L).takeIf { it != 0L } ?: s.optString("id").toLongOrNull() ?: return@mapNotNull null
-				val sRawNsfw = s.opt("contentWarning") ?: s.opt("contentRating")
-					?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
-				val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
-				ExtSource(
-					id = id,
-					name = s.optString("name", name),
-					language = s.optString("lang").ifBlank { s.optString("language", "all") },
-					homeUrl = s.optString("baseUrl").ifBlank { s.optString("homeUrl") }.takeIf { it.isNotBlank() },
-					contentType = sType,
+				val apkRaw = obj.optString("apk").ifBlank { obj.optString("apkUrl") }.ifBlank { res?.optString("apkUrl").orEmpty() }
+				val apkUrl =
+					when {
+						apkRaw.isBlank() -> null
+						apkRaw.startsWith("http://") || apkRaw.startsWith("https://") -> apkRaw
+						else -> "$baseRepoUrl/apk/$apkRaw"
+					}
+				val jarRaw = obj.optString("jar").ifBlank { obj.optString("jarUrl") }.ifBlank { res?.optString("jarUrl").orEmpty() }
+				val jarUrl =
+					when {
+						jarRaw.isBlank() -> null
+						jarRaw.startsWith("http://") || jarRaw.startsWith("https://") -> jarRaw
+						else -> "$baseRepoUrl/jar/$jarRaw"
+					}
+				val iconRaw = obj.optString("iconUrl").ifBlank { res?.optString("iconUrl").orEmpty() }
+				val iconUrl =
+					when {
+						iconRaw.isNotBlank() -> iconRaw
+						else -> "$baseRepoUrl/icon/$pkg.png"
+					}
+				val code =
+					obj.optLong("code", -1L).takeIf { it != -1L }
+						?: obj.optLong("versionCode", -1L).takeIf { it != -1L }
+						?: obj.optString("versionCode").toLongOrNull()
+				val versionName = obj.optString("version").ifBlank { obj.optString("versionName") }.takeIf { it.isNotBlank() }
+
+				val srcArr = obj.optJSONArray("sources")
+				val sources =
+					(0 until (srcArr?.length() ?: 0)).mapNotNull { si ->
+						val s = srcArr?.optJSONObject(si) ?: return@mapNotNull null
+						val id = s.optLong("id", 0L).takeIf { it != 0L } ?: s.optString("id").toLongOrNull() ?: return@mapNotNull null
+						val sRawNsfw =
+							s.opt("contentWarning") ?: s.opt("contentRating")
+								?: s.opt("contentType") ?: s.opt("isNsfw") ?: s.opt("nsfw")
+						val sType = if (sRawNsfw != null) contentTypeFromCatalog(sRawNsfw, lib, type) else type
+						ExtSource(
+							id = id,
+							name = s.optString("name", name),
+							language = s.optString("lang").ifBlank { s.optString("language", "all") },
+							homeUrl = s.optString("baseUrl").ifBlank { s.optString("homeUrl") }.takeIf { it.isNotBlank() },
+							contentType = sType,
+						)
+					}
+				ExtArtifact(
+					repositoryUrl = repoUrl,
+					name = name,
+					packageName = pkg,
+					jarUrl = jarUrl,
+					apkUrl = apkUrl,
+					iconUrl = iconUrl,
+					extensionLib = lib,
+					versionCode = code,
+					versionName = versionName,
+					contentType = type,
+					sources = sources,
 				)
 			}
-			ExtArtifact(
-				repositoryUrl = repoUrl,
-				name = name,
-				packageName = pkg,
-				jarUrl = jarUrl,
-				apkUrl = apkUrl,
-				iconUrl = iconUrl,
-				extensionLib = lib,
-				versionCode = code,
-				versionName = versionName,
-				contentType = type,
-				sources = sources,
-			)
-		}
-	}.getOrDefault(emptyList())
+		}.getOrDefault(emptyList())
 
 	@OptIn(ExperimentalSerializationApi::class)
-	private fun parsePb(bytes: ByteArray, repo: String, depth: Int = 0, input: String? = null): List<ExtArtifact> = runCatching {
-		if (depth > 3) return@runCatching emptyList()
-		val bytes = bytes.gunzip()
-		val index = runCatching { ProtoBuf.decodeFromByteArray<IndexPb>(bytes) }.getOrNull()
-		index?.name?.takeIf { it.isNotBlank() }?.let { name ->
-			input?.let { setRepositoryName(it, name) }; setRepositoryName(repo, name)
-		}
-		val baseRepoUrl = repo.substringBeforeLast('/')
-		if (index?.extensionListUrl != null) {
-			val resolved = index.extensionListUrl.resolveUrl(baseRepoUrl)
-				?: return@runCatching emptyList()
-			val request = Request.Builder().url(resolved)
-				.header("Accept", "application/octet-stream, */*")
-				.header("User-Agent", UserAgents.KOTATSU)
-				.build()
-			return@runCatching client.newCall(request).execute().use { res ->
-				if (!res.isSuccessful) emptyList()
-				else parsePb(res.body.bytes(), repo, depth + 1, input)
+	private fun parsePb(
+		bytes: ByteArray,
+		repo: String,
+		depth: Int = 0,
+		input: String? = null,
+	): List<ExtArtifact> =
+		runCatching {
+			if (depth > 3) return@runCatching emptyList()
+			val bytes = bytes.gunzip()
+			val index = runCatching { ProtoBuf.decodeFromByteArray<IndexPb>(bytes) }.getOrNull()
+			index?.name?.takeIf { it.isNotBlank() }?.let { name ->
+				input?.let { setRepositoryName(it, name) }
+				setRepositoryName(repo, name)
 			}
-		}
-		val extensions = index?.extensionList?.extensions ?: runCatching {
-			ProtoBuf.decodeFromByteArray<ExtensionListPb>(bytes).extensions
-		}.getOrNull() ?: emptyList()
-		extensions.mapNotNullTo(ArrayList(extensions.size)) { ext ->
-			val pkg = ext.packageName ?: return@mapNotNullTo null
-			val lib = ext.extensionLib?.toDoubleOrNull()
-			val rawNsfw = ext.contentWarning?.name
-			val type = contentTypeFromCatalog(rawNsfw, lib)
-			val apk = ext.resources?.apkUrl.resolveUrl(baseRepoUrl)
-			val jar = ext.resources?.jarUrl.resolveUrl(baseRepoUrl)
-			val icon = ext.resources?.iconUrl.resolveUrl(baseRepoUrl) ?: "$baseRepoUrl/icon/$pkg.png"
-			val sources = ext.sources.mapNotNullTo(ArrayList(ext.sources.size)) { src ->
-				val id = src.id ?: return@mapNotNullTo null
-				ExtSource(
-					id = id,
-					name = src.name ?: pkg,
-					language = src.language ?: "all",
-					homeUrl = src.homeUrl?.takeIf { it.isNotBlank() },
+			val baseRepoUrl = repo.substringBeforeLast('/')
+			if (index?.extensionListUrl != null) {
+				val resolved =
+					index.extensionListUrl.resolveUrl(baseRepoUrl)
+						?: return@runCatching emptyList()
+				val request =
+					Request
+						.Builder()
+						.url(resolved)
+						.header("Accept", "application/octet-stream, */*")
+						.header("User-Agent", UserAgents.KOTATSU)
+						.build()
+				return@runCatching client.newCall(request).execute().use { res ->
+					if (!res.isSuccessful) {
+						emptyList()
+					} else {
+						parsePb(res.body.bytes(), repo, depth + 1, input)
+					}
+				}
+			}
+			val extensions =
+				index?.extensionList?.extensions ?: runCatching {
+					ProtoBuf.decodeFromByteArray<ExtensionListPb>(bytes).extensions
+				}.getOrNull() ?: emptyList()
+			extensions.mapNotNullTo(ArrayList(extensions.size)) { ext ->
+				val pkg = ext.packageName ?: return@mapNotNullTo null
+				val lib = ext.extensionLib?.toDoubleOrNull()
+				val rawNsfw = ext.contentWarning?.name
+				val type = contentTypeFromCatalog(rawNsfw, lib)
+				val apk = ext.resources?.apkUrl.resolveUrl(baseRepoUrl)
+				val jar = ext.resources?.jarUrl.resolveUrl(baseRepoUrl)
+				val icon = ext.resources?.iconUrl.resolveUrl(baseRepoUrl) ?: "$baseRepoUrl/icon/$pkg.png"
+				val sources =
+					ext.sources.mapNotNullTo(ArrayList(ext.sources.size)) { src ->
+						val id = src.id ?: return@mapNotNullTo null
+						ExtSource(
+							id = id,
+							name = src.name ?: pkg,
+							language = src.language ?: "all",
+							homeUrl = src.homeUrl?.takeIf { it.isNotBlank() },
+							contentType = type,
+						)
+					}
+				ExtArtifact(
+					repositoryUrl = repo,
+					name = ext.name ?: pkg,
+					packageName = pkg,
+					jarUrl = jar,
+					apkUrl = apk,
+					iconUrl = icon,
+					extensionLib = lib,
+					versionCode = ext.versionCode,
+					versionName = ext.versionName,
 					contentType = type,
+					sources = sources,
 				)
 			}
-			ExtArtifact(
-				repositoryUrl = repo,
-				name = ext.name ?: pkg,
-				packageName = pkg,
-				jarUrl = jar,
-				apkUrl = apk,
-				iconUrl = icon,
-				extensionLib = lib,
-				versionCode = ext.versionCode,
-				versionName = ext.versionName,
-				contentType = type,
-				sources = sources,
-			)
-		}
-	}.getOrDefault(emptyList())
+		}.getOrDefault(emptyList())
 
 	private companion object {
 		val GITHUB_REGEX = Regex("(?i)^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+?)(?:/.*)?$")
@@ -571,7 +666,9 @@ class ExtensionProvider(
 		private fun ByteArray.gunzip(): ByteArray =
 			if (size >= 2 && this[0] == 0x1f.toByte() && this[1] == 0x8b.toByte()) {
 				runCatching { GZIPInputStream(inputStream()).use { it.readBytes() } }.getOrDefault(this)
-			} else this
+			} else {
+				this
+			}
 
 		private fun String.isPb(): Boolean = this.endsWith(".pb", true)
 	}
